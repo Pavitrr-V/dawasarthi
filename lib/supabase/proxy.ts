@@ -45,7 +45,10 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  if (!isAuthenticated && !isPublicPath(pathname)) {
+  // API routes enforce auth themselves and must return JSON, not a redirect.
+  const isApi = pathname === "/api" || pathname.startsWith("/api/");
+
+  if (!isAuthenticated && !isPublicPath(pathname) && !isApi) {
     return redirectWithCookies(request, "/login", response);
   }
 
