@@ -4,6 +4,41 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
 
+type Supabase = ReturnType<typeof createClient>;
+
+const SIGNED_URL_ATTEMPTS = 3;
+
+/** Signed-URL calls (and the session refresh behind them) can blip once in a
+ *  while, so retry before showing the user "Photo unavailable". */
+async function createSignedUrlWithRetry(
+  supabase: Supabase,
+  path: string
+): Promise<string | null> {
+  for (let attempt = 1; attempt <= SIGNED_URL_ATTEMPTS; attempt += 1) {
+    try {
+      const { data, error } = await supabase.storage
+        .from(MEDICINE_IMAGES_BUCKET)
+        .createSignedUrl(path, 60 * 60);
+      if (data?.signedUrl) return data.signedUrl;
+      console.warn(
+        `[photo-zoom] signed url failed (${attempt}/${SIGNED_URL_ATTEMPTS})`,
+        path,
+        error?.message
+      );
+    } catch (error) {
+      console.warn(
+        `[photo-zoom] signed url threw (${attempt}/${SIGNED_URL_ATTEMPTS})`,
+        path,
+        error
+      );
+    }
+    if (attempt < SIGNED_URL_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+    }
+  }
+  return null;
+}
+
 /**
  * Thumbnails of the photos the user scanned, so they can compare the form
  * against the original. Tap opens a full-screen zoom view. A missing URL is
@@ -22,20 +57,14 @@ export function PhotoZoom({ paths }: { paths: string[] }) {
     const supabase = createClient();
 
     for (const path of paths) {
-      supabase.storage
-        .from(MEDICINE_IMAGES_BUCKET)
-        .createSignedUrl(path, 60 * 60)
-        .then(({ data, error }) => {
-          if (cancelled) return;
-          if (error || !data?.signedUrl) {
-            setFailed((prev) => ({ ...prev, [path]: true }));
-            return;
-          }
-          setUrls((prev) => ({ ...prev, [path]: data.signedUrl }));
-        })
-        .catch(() => {
-          if (!cancelled) setFailed((prev) => ({ ...prev, [path]: true }));
-        });
+      createSignedUrlWithRetry(supabase, path).then((url) => {
+        if (cancelled) return;
+        if (!url) {
+          setFailed((prev) => ({ ...prev, [path]: true }));
+          return;
+        }
+        setUrls((prev) => ({ ...prev, [path]: url }));
+      });
     }
 
     return () => {
