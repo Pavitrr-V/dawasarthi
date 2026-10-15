@@ -1,16 +1,22 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
+import { getSelectedPatient } from "@/lib/patients";
 import { Card, PageHeader } from "@/components/ui";
 import { CabinetIcon, HistoryIcon, ScanIcon } from "@/components/icons";
 
 export default async function HomePage() {
   await requireRole("patient");
+  const selected = await getSelectedPatient();
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Home"
-        subtitle="Your medicines, trust checks, and reminders in one place."
+        subtitle={
+          selected
+            ? `Medicines, trust checks, and reminders for ${selected.name}.`
+            : "Your medicines, trust checks, and reminders in one place."
+        }
       />
 
       <div className="grid grid-cols-1 gap-3">
