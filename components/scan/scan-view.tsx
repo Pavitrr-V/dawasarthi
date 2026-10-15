@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image";
 import { DISCLAIMER, MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
+import { saveReviewPayload } from "@/lib/review";
 import { Button, Card } from "@/components/ui";
 import { ImageSlot } from "@/components/scan/image-slot";
 import { ManualEntryForm } from "@/components/scan/manual-entry-form";
@@ -25,6 +27,7 @@ function isSplit(
 }
 
 export function ScanView({ userId }: { userId: string }) {
+  const router = useRouter();
   const [mode, setMode] = useState<ScanMode>("medicine");
   const [strip, setStrip] = useState<File | null>(null);
   const [box, setBox] = useState<File | null>(null);
@@ -32,6 +35,7 @@ export function ScanView({ userId }: { userId: string }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ExtractionResult | null>(null);
+  const [paths, setPaths] = useState<string[]>([]);
   const [showManual, setShowManual] = useState(false);
 
   const working = phase === "uploading" || phase === "extracting";
@@ -48,6 +52,7 @@ export function ScanView({ userId }: { userId: string }) {
     setBox(null);
     setSingle(null);
     setResult(null);
+    setPaths([]);
     setError(null);
     setShowManual(false);
     setPhase("idle");
@@ -92,6 +97,7 @@ export function ScanView({ userId }: { userId: string }) {
         }
         paths.push(path);
       }
+      setPaths(paths);
 
       setPhase("extracting");
       const response = await fetch("/api/extract", {
@@ -123,6 +129,30 @@ export function ScanView({ userId }: { userId: string }) {
     }
   }
 
+  /**
+   * Hand the extraction to /scan/review (sessionStorage) so the user can fix
+   * low-confidence fields before anything is saved.
+   */
+  function goToReview() {
+    if (!result) return;
+    // Two photos come back as strip + box, but the review form edits a single
+    // medicine, so prefer the strip reading and fall back to the box.
+    const extraction = isSplit(result)
+      ? result.strip ?? result.box
+      : result;
+
+    if (!extraction) {
+      setError(
+        "We could not read these photos clearly. Enter the details manually."
+      );
+      setPhase("error");
+      return;
+    }
+
+    saveReviewPayload({ extraction, mode, imagePaths: paths });
+    router.push("/scan/review");
+  }
+
   if (phase === "done" && result) {
     return (
       <div className="space-y-4">
@@ -134,7 +164,15 @@ export function ScanView({ userId }: { userId: string }) {
         ) : (
           <ResultCard data={result} />
         )}
-        <Button type="button" className="w-full" onClick={reset}>
+        <Button type="button" className="w-full" onClick={goToReview}>
+          Review &amp; save
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full"
+          onClick={reset}
+        >
           Scan another
         </Button>
         <p className="text-center text-sm text-slate-400">{DISCLAIMER}</p>
@@ -252,11 +290,7 @@ export function ScanView({ userId }: { userId: string }) {
       {phase !== "error" && (
         <button
           type="button"
-          onClick={() => {
-            setShowManual(true);
-            setError(null);
-            setPhase("idle");
-          }}
+          onClick={() => router.push("/scan/manual")}
           disabled={working}
           className="w-full py-1 text-center text-[15px] font-semibold text-primary-700 disabled:opacity-60"
         >

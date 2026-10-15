@@ -92,11 +92,22 @@ export function Field({
   );
 }
 
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
+/**
+ * tone="verify" draws the amber "please check this value" border used by the
+ * scan review form for low-confidence extractions.
+ */
+export function Input({
+  tone = "default",
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & { tone?: "default" | "verify" }) {
+  const skin =
+    tone === "verify"
+      ? "border-amber-400 focus:border-amber-500 focus:ring-amber-200"
+      : "border-slate-300 focus:border-primary-500 focus:ring-primary-200";
   return (
     <input
       {...props}
-      className={`min-h-[52px] w-full rounded-xl border border-slate-300 bg-white px-4 text-[17px] text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 ${props.className ?? ""}`}
+      className={`min-h-[52px] w-full rounded-xl border bg-white px-4 text-[17px] text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${skin} ${props.className ?? ""}`}
     />
   );
 }
