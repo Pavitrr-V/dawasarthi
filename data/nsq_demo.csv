@@ -1,0 +1,9 @@
+product_name,batch_no,manufacturer,alert_type,alert_date,source_url
+YOUR_STRIP_NAME_HERE,YOUR_BATCH_HERE,YOUR_MANUFACTURER_HERE,nsq,2026-09-20,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+"Calcium Carbonate with Vit. D3 Tablets IP",SNT-250038,"SVR Healthcare Vill. Barotiwala, Paonta Sahib, Distt Sirmaur",nsq,2026-08-01,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+"Cefuroxime Axetil IP",CT503513C,"Nikvin Healthcare (I) Pvt. Ltd., Baddi-Barotiwala Road Govt. Timber Depot, Vill. Katha, Baddi (H.P)-173205",nsq,2026-08-01,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+"Disodium Hydrogen Citrate Solution",KBI26068C,"Stadmed Pvt. Ltd. C-18, Sarojni Nagar Industrial Estate Lucknow-226008.",spurious,2026-08-01,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+DEMO Paracetamol Tablets IP 500mg,DMO-PCM-001,Demo Pharma Ltd,nsq,2026-08-20,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+DEMO Amoxicillin Capsules IP 250mg,DMO-AMX-002,Demo Remedies Pvt Ltd,nsq,2026-08-20,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+DEMO Cough Syrup 100ml,DMO-SYR-003,Demo Labs,misbranded,2026-07-20,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
+DEMO Telmisartan Tablets IP 40mg,DMO-TEL-004,Demo Healthcare,nsq,2026-07-20,https://cdscoonline.gov.in/CDSCO/viewPublicNSQDrug
