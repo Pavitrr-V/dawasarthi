@@ -17,6 +17,8 @@ type Props = {
   imagePaths: string[];
   mode: ScanMode;
   source: "scan" | "manual";
+  /** Barcode flow only: whether the scanned code matched medicine_catalog. */
+  datasetMatch?: boolean;
 };
 
 function compositionLabel(item: {
@@ -36,7 +38,13 @@ function parseMrp(text: string): number | null {
  * Editable medicine form used by both /scan/review (prefilled from the vision
  * LLM, low-confidence fields flagged) and /scan/manual (blank).
  */
-export function MedicineForm({ initial, imagePaths, mode, source }: Props) {
+export function MedicineForm({
+  initial,
+  imagePaths,
+  mode,
+  source,
+  datasetMatch,
+}: Props) {
   const router = useRouter();
   const confidence = initial.confidence ?? {};
   const needsVerify = (field: string) => needsVerification(confidence, field);
@@ -97,6 +105,7 @@ export function MedicineForm({ initial, imagePaths, mode, source }: Props) {
       mode,
       source,
       confidence,
+      dataset_match: datasetMatch,
     };
 
     try {

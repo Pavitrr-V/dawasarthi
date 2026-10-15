@@ -23,6 +23,11 @@ export type MedicineInput = {
   source: "scan" | "manual";
   /** Raw LLM field confidence, stored for the risk engine (Phase 3). */
   confidence: Record<string, number>;
+  /**
+   * Barcode flow only: did the scanned code match medicine_catalog?
+   * `false` is an AMBER risk flag in Phase 3. Absent for photo/manual entries.
+   */
+  dataset_match?: boolean;
 };
 
 /** Below this an extracted field must be double-checked by a human. */
@@ -108,6 +113,7 @@ export const medicineInputSchema = z
     mode: z.enum(["medicine", "prescription", "barcode"]),
     source: z.enum(["scan", "manual"]).default("scan"),
     confidence: z.record(z.string(), z.number()).default({}),
+    dataset_match: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (

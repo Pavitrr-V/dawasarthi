@@ -11,6 +11,11 @@ export type ReviewPayload = {
   mode: ScanMode;
   /** Storage paths of the uploaded photos (strip first, box second). */
   imagePaths: string[];
+  /**
+   * Barcode flow only: whether the scanned code matched medicine_catalog.
+   * `false` becomes an AMBER risk flag in Phase 3. Undefined for photo scans.
+   */
+  datasetMatch?: boolean;
 };
 
 const REVIEW_KEY = "medscan:review:v1";
@@ -44,6 +49,10 @@ function readFromSession(): ReviewPayload | null {
       imagePaths: Array.isArray(parsed.imagePaths)
         ? parsed.imagePaths.slice(0, 2)
         : [],
+      datasetMatch:
+        typeof parsed.datasetMatch === "boolean"
+          ? parsed.datasetMatch
+          : undefined,
     };
   } catch {
     return null;

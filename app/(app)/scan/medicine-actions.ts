@@ -83,6 +83,11 @@ export async function saveMedicine(
         scan_mode: data.mode,
         source: data.source,
         storage_notes: data.storage_notes,
+        // Barcode flow only: false = the code did not match medicine_catalog,
+        // which Phase 3 should treat as an AMBER risk flag.
+        ...(typeof data.dataset_match === "boolean"
+          ? { dataset_match: data.dataset_match }
+          : {}),
         // TODO(Phase 3B): /api/verify/start will move this through
         // queued -> running -> done and fill online_verifications.
         verify_status: "pending",

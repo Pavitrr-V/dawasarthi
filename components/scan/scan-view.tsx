@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image";
 import { DISCLAIMER, MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
-import { saveReviewPayload } from "@/lib/review";
+import { EMPTY_EXTRACTION, saveReviewPayload } from "@/lib/review";
+import { nameHintFromScan, parseGs1 } from "@/lib/gs1";
+import { lookupCatalogByName } from "@/app/(app)/scan/catalog-actions";
 import { Button, Card } from "@/components/ui";
 import { ImageSlot } from "@/components/scan/image-slot";
+import { BarcodeScanner } from "@/components/scan/barcode-scanner";
 import { ManualEntryForm } from "@/components/scan/manual-entry-form";
 import { ResultCard } from "@/components/scan/result-card";
 import type { ExtractionResult, MedicineExtraction, ScanMode } from "@/lib/extraction";
@@ -37,8 +40,15 @@ export function ScanView({ userId }: { userId: string }) {
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [paths, setPaths] = useState<string[]>([]);
   const [showManual, setShowManual] = useState(false);
+  /** Barcode flow: true while we resolve a scanned code. */
+  const [barcodeBusy, setBarcodeBusy] = useState(false);
+  /** Barcode flow: did the code match medicine_catalog? (Phase 3 AMBER flag) */
+  const [datasetMatch, setDatasetMatch] = useState<boolean | undefined>();
+  /** Shown after a barcode falls back to photo OCR. */
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
 
   const working = phase === "uploading" || phase === "extracting";
+  const busy = working || barcodeBusy;
 
   function filesForMode(): File[] {
     if (mode === "medicine") return [strip, box].filter(Boolean) as File[];
@@ -56,6 +66,9 @@ export function ScanView({ userId }: { userId: string }) {
     setError(null);
     setShowManual(false);
     setPhase("idle");
+    setBarcodeBusy(false);
+    setDatasetMatch(undefined);
+    setFallbackNote(null);
   }
 
   function selectMode(next: ScanMode) {
@@ -65,6 +78,19 @@ export function ScanView({ userId }: { userId: string }) {
     setError(null);
     setShowManual(false);
     setPhase("idle");
+    setBarcodeBusy(false);
+    setDatasetMatch(undefined);
+    setFallbackNote(null);
+  }
+
+  /**
+   * A barcode could not be turned into a known medicine: switch to the photo
+   * flow and remember that the dataset did not match (Phase 3 AMBER flag).
+   */
+  function fallBackToPhoto(message: string) {
+    selectMode("medicine");
+    setDatasetMatch(false);
+    setFallbackNote(message);
   }
 
   async function runScan() {
@@ -81,7 +107,7 @@ export function ScanView({ userId }: { userId: string }) {
 
     try {
       const supabase = createClient();
-      const paths: string[] = [];
+      const uploaded: string[] = [];
 
       setPhase("uploading");
       for (const file of files) {
@@ -95,15 +121,15 @@ export function ScanView({ userId }: { userId: string }) {
             "We could not upload your photo. Check your connection and try again."
           );
         }
-        paths.push(path);
+        uploaded.push(path);
       }
-      setPaths(paths);
+      setPaths(uploaded);
 
       setPhase("extracting");
       const response = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, paths }),
+        body: JSON.stringify({ mode, paths: uploaded }),
       });
       const payload = (await response.json().catch(() => null)) as
         | ExtractionResult
@@ -149,8 +175,72 @@ export function ScanView({ userId }: { userId: string }) {
       return;
     }
 
-    saveReviewPayload({ extraction, mode, imagePaths: paths });
+    saveReviewPayload({ extraction, mode, imagePaths: paths, datasetMatch });
     router.push("/scan/review");
+  }
+
+  /**
+   * A barcode was decoded. Prefer a medicine_catalog match (by fuzzy name),
+   * then prefill batch/expiry from GS1. Anything else falls back to photo OCR.
+   */
+  async function handleBarcode(text: string) {
+    if (barcodeBusy) return;
+    setBarcodeBusy(true);
+    setError(null);
+    setFallbackNote(null);
+
+    try {
+      const parsed = parseGs1(text);
+      const nameHint = nameHintFromScan(text);
+      // medicine_catalog has no barcode column: only a name can be matched.
+      const match = nameHint ? await lookupCatalogByName(nameHint) : null;
+      const matched = match !== null;
+
+      const extraction: MedicineExtraction = {
+        ...EMPTY_EXTRACTION,
+        name: match?.name ?? null,
+        composition:
+          match?.composition.map((ingredient) => ({
+            ingredient,
+            strength: null,
+          })) ?? [],
+        manufacturer: match?.manufacturer ?? null,
+        batch_no: parsed.batch,
+        expiry_date: parsed.expiry,
+        barcode_text: parsed.gtin,
+        date_precision: parsed.expiryPrecision,
+        confidence: {
+          ...(match
+            ? { name: 0.8, composition: match.composition.length > 0 ? 0.8 : 0.5 }
+            : {}),
+          ...(match?.manufacturer ? { manufacturer: 0.75 } : {}),
+          ...(parsed.batch ? { batch_no: 0.9 } : {}),
+          ...(parsed.expiry ? { expiry_date: 0.95 } : {}),
+          ...(parsed.gtin ? { barcode_text: 0.95 } : {}),
+        },
+      };
+
+      // A match, or GS1 batch/expiry, is worth reviewing.
+      if (matched || parsed.batch || parsed.expiry) {
+        saveReviewPayload({
+          extraction,
+          mode: "barcode",
+          imagePaths: [],
+          datasetMatch: matched,
+        });
+        router.push("/scan/review");
+        return;
+      }
+
+      // A plain EAN/UPC with no name to match: fall back to photo OCR.
+      fallBackToPhoto(
+        "We read the barcode, but it did not include a product name or expiry date. Take a photo of the medicine instead."
+      );
+    } catch {
+      fallBackToPhoto(
+        "We could not process that barcode. Take a photo of the medicine instead."
+      );
+    }
   }
 
   if (phase === "done" && result) {
@@ -204,7 +294,7 @@ export function ScanView({ userId }: { userId: string }) {
           <button
             key={option.value}
             type="button"
-            disabled={working}
+            disabled={busy}
             onClick={() => selectMode(option.value)}
             className={`min-h-[44px] rounded-lg px-1 text-[15px] font-semibold transition-colors disabled:opacity-60 ${
               mode === option.value
@@ -217,34 +307,52 @@ export function ScanView({ userId }: { userId: string }) {
         ))}
       </div>
 
-      {mode === "medicine" ? (
+      {fallbackNote && mode !== "barcode" && (
+        <Card className="space-y-1 border-amber-200 bg-amber-50">
+          <p className="text-[15px] font-medium text-amber-900">
+            Barcode not recognised
+          </p>
+          <p className="text-[15px] text-amber-800">{fallbackNote}</p>
+        </Card>
+      )}
+
+      {mode === "barcode" ? (
+        barcodeBusy ? (
+          <BarcodeChecking />
+        ) : (
+          <BarcodeScanner
+            onDecoded={handleBarcode}
+            onUsePhoto={() =>
+              fallBackToPhoto(
+                "Take a photo of the medicine instead and we will read it."
+              )
+            }
+          />
+        )
+      ) : mode === "medicine" ? (
         <div className="space-y-3">
           <ImageSlot
             label="Front / Strip"
             required
             file={strip}
             onChange={setStrip}
-            disabled={working}
+            disabled={busy}
           />
           <ImageSlot
             label="Back / Box"
             file={box}
             onChange={setBox}
-            disabled={working}
+            disabled={busy}
           />
         </div>
       ) : (
         <ImageSlot
-          label={mode === "prescription" ? "Prescription photo" : "Barcode photo"}
+          label="Prescription photo"
           required
-          hint={
-            mode === "barcode"
-              ? "Line up the barcode inside the frame."
-              : "Include the whole prescription if you can."
-          }
+          hint="Include the whole prescription if you can."
           file={single}
           onChange={setSingle}
-          disabled={working}
+          disabled={busy}
         />
       )}
 
@@ -276,14 +384,16 @@ export function ScanView({ userId }: { userId: string }) {
         </Card>
       )}
 
-      <Button
-        type="button"
-        className="w-full"
-        onClick={runScan}
-        disabled={!hasRequired || working}
-      >
-        {working ? "Scanning..." : "Scan"}
-      </Button>
+      {mode !== "barcode" && (
+        <Button
+          type="button"
+          className="w-full"
+          onClick={runScan}
+          disabled={!hasRequired || busy}
+        >
+          {working ? "Scanning..." : "Scan"}
+        </Button>
+      )}
 
       <p className="text-center text-sm text-slate-400">{DISCLAIMER}</p>
 
@@ -291,13 +401,28 @@ export function ScanView({ userId }: { userId: string }) {
         <button
           type="button"
           onClick={() => router.push("/scan/manual")}
-          disabled={working}
+          disabled={busy}
           className="w-full py-1 text-center text-[15px] font-semibold text-primary-700 disabled:opacity-60"
         >
           Enter details manually instead
         </button>
       )}
     </div>
+  );
+}
+
+function BarcodeChecking() {
+  return (
+    <Card className="space-y-3">
+      <p className="text-[15px] font-medium text-primary-700">
+        Checking the code…
+      </p>
+      <div className="animate-pulse space-y-2">
+        <div className="h-4 w-2/3 rounded bg-slate-200" />
+        <div className="h-4 w-1/2 rounded bg-slate-200" />
+        <div className="h-4 w-3/4 rounded bg-slate-200" />
+      </div>
+    </Card>
   );
 }
 

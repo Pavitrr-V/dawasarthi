@@ -70,6 +70,7 @@ export function ReviewView() {
       imagePaths={payload.imagePaths}
       mode={payload.mode}
       source="scan"
+      datasetMatch={payload.datasetMatch}
     />
   );
 }
