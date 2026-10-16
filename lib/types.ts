@@ -56,4 +56,8 @@ export type MedicineInfo = {
   model: string;
 };
 
-export type MedicineInfoPayload = MedicineInfo & { cached: boolean };
+export type MedicineInfoPayload = MedicineInfo & {
+  cached: boolean;
+  /** The model that answered the fallback chain (equals `model`). */
+  model_used: string;
+};

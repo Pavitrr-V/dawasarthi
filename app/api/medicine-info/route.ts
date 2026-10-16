@@ -3,13 +3,23 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { GeminiConfigError, GeminiRequestError } from "@/lib/gemini";
+import {
+  callGemini,
+  GeminiAllFailedError,
+  GeminiConfigError,
+  GeminiRequestError,
+} from "@/lib/gemini";
 import {
   INFO_CACHE_TTL_DAYS,
-  generateMedicineInfo,
+  INFO_SYSTEM_INSTRUCTION,
+  MEDICINE_INFO_JSON_SCHEMA,
+  buildInfoPrompt,
+  finalizeMedicineInfo,
   getLiveSourceText,
   normalizeCompositionKey,
+  parseInfoJson,
   type CatalogReference,
+  type InfoLlmOutput,
 } from "@/lib/medicine-info";
 import type { MedicineInfo, MedicineInfoPayload } from "@/lib/types";
 
@@ -266,7 +276,11 @@ export async function POST(request: Request) {
   if (medicine_id) {
     const cached = readMedicineCache(existingInfo);
     if (cached) {
-      return NextResponse.json<MedicineInfoPayload>({ ...cached, cached: true });
+      return NextResponse.json<MedicineInfoPayload>({
+        ...cached,
+        cached: true,
+        model_used: cached.model,
+      });
     }
   }
 
@@ -280,6 +294,7 @@ export async function POST(request: Request) {
     return NextResponse.json<MedicineInfoPayload>({
       ...globalCached,
       cached: true,
+      model_used: globalCached.model,
     });
   }
 
@@ -287,14 +302,17 @@ export async function POST(request: Request) {
   const catalog = await lookupCatalog(supabase, name, composition);
   const liveSourceText = await getLiveSourceText(composition);
 
-  let info: MedicineInfo | null;
+  let info: MedicineInfo;
   try {
-    info = await generateMedicineInfo({
-      name,
-      composition,
-      catalog,
-      liveSourceText,
+    const result = await callGemini<InfoLlmOutput>({
+      kind: "text",
+      prompt: buildInfoPrompt({ name, composition, catalog, liveSourceText }),
+      systemInstruction: INFO_SYSTEM_INSTRUCTION,
+      responseSchema: MEDICINE_INFO_JSON_SCHEMA,
+      parse: parseInfoJson,
     });
+    // model_used is the model that actually answered the fallback chain.
+    info = finalizeMedicineInfo(result.data, result.model_used, liveSourceText);
   } catch (error) {
     if (error instanceof GeminiConfigError) {
       return fail(
@@ -302,21 +320,23 @@ export async function POST(request: Request) {
         503
       );
     }
-    if (error instanceof GeminiRequestError) {
+    if (error instanceof GeminiAllFailedError) {
       return fail(
-        "The info service is busy right now. Please try again in a moment.",
+        "Daily limit reached. Please try again later or enter details manually.",
         503
       );
     }
+    if (error instanceof GeminiRequestError) {
+      if (error.status === 401 || error.status === 403) {
+        return fail(
+          "The info service is not configured yet. Please try again later.",
+          503
+        );
+      }
+      return fail("The info service had a problem. Please try again.", 502);
+    }
     console.error("[api/medicine-info] generation failed", error);
     return fail("We could not fetch medicine info. Please try again.", 502);
-  }
-
-  if (!info) {
-    return fail(
-      "We could not read the medicine info clearly. Please try again.",
-      422
-    );
   }
 
   // 4. Cache the result (best effort; a cache failure must not fail the view).
@@ -328,5 +348,6 @@ export async function POST(request: Request) {
   return NextResponse.json<MedicineInfoPayload>({
     ...info,
     cached: false,
+    model_used: info.model,
   });
 }

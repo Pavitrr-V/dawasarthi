@@ -3,12 +3,17 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  callGemini,
+  GeminiAllFailedError,
   GeminiConfigError,
   GeminiRequestError,
-  extractMedicineFromImage,
 } from "@/lib/gemini";
 import {
+  EXTRACTION_JSON_SCHEMA,
+  SYSTEM_INSTRUCTION,
   SCAN_MODES,
+  buildUserPrompt,
+  parseExtractionJson,
   type MedicineExtraction,
   type ScanMode,
 } from "@/lib/extraction";
@@ -102,11 +107,19 @@ export async function POST(request: Request) {
     });
   }
 
-  // allSettled never throws: each image either yields an extraction (value) or
-  // an error we classify below. null value = model could not read the photo.
+  // allSettled never throws: each image either yields a { data, model_used }
+  // result or an error we classify below. The model used is returned in the
+  // response (never shown in UI text) so the reader is traceable.
   const settled = await Promise.allSettled(
     images.map((image) =>
-      extractMedicineFromImage({ ...image, mode: mode as ScanMode })
+      callGemini<MedicineExtraction>({
+        kind: "scan",
+        prompt: buildUserPrompt(mode as ScanMode),
+        systemInstruction: SYSTEM_INSTRUCTION,
+        images: [image],
+        responseSchema: EXTRACTION_JSON_SCHEMA,
+        parse: parseExtractionJson,
+      })
     )
   );
 
@@ -117,7 +130,10 @@ export async function POST(request: Request) {
   }
 
   const extractions: (MedicineExtraction | null)[] = settled.map((result) =>
-    result.status === "fulfilled" ? result.value : null
+    result.status === "fulfilled" ? result.value.data : null
+  );
+  const modelsUsed: (string | null)[] = settled.map((result) =>
+    result.status === "fulfilled" ? result.value.model_used : null
   );
 
   const rejected = settled.filter(
@@ -131,22 +147,45 @@ export async function POST(request: Request) {
     );
   }
 
-  // At least one image was genuinely unreadable by the model vs the scanner
-  // being temporarily unavailable — those need different messages.
-  const transient =
-    rejected.length > 0 &&
-    rejected.every((result) => result.reason instanceof GeminiRequestError);
-  const unreadable = "We could not read this photo clearly. Try a sharper photo or enter it manually.";
-  const busy = "The scanner is busy right now. Please try again in a moment.";
+  // A fatal status (400/401/403) is returned immediately - no fallback happened.
+  const fatal = rejected.find(
+    (result) => result.reason instanceof GeminiRequestError
+  );
+  if (fatal) {
+    const status = (fatal.reason as GeminiRequestError).status;
+    if (status === 401 || status === 403) {
+      return fail(
+        "Photo scanning is not configured yet. Enter the details manually.",
+        503
+      );
+    }
+    return fail(
+      "The scanner had a problem. Please try again or enter details manually.",
+      502
+    );
+  }
+
+  // Every model in the chain failed for at least one photo: friendly message.
+  const allFailed = rejected.some(
+    (result) => result.reason instanceof GeminiAllFailedError
+  );
+  const message = allFailed
+    ? "Daily limit reached. Please try again later or enter details manually."
+    : "We could not read this photo clearly. Try a sharper photo or enter it manually.";
+  const status = allFailed ? 503 : 422;
 
   // Two images (strip + box) are returned per image for later cross-checking.
   if (paths.length === 2) {
     const [strip, box] = extractions;
-    if (!strip && !box) return fail(transient ? busy : unreadable, transient ? 503 : 422);
-    return NextResponse.json({ strip: strip ?? null, box: box ?? null });
+    if (!strip && !box) return fail(message, status);
+    return NextResponse.json({
+      strip: strip ?? null,
+      box: box ?? null,
+      model_used: { strip: modelsUsed[0] ?? null, box: modelsUsed[1] ?? null },
+    });
   }
 
   const single = extractions[0];
-  if (!single) return fail(transient ? busy : unreadable, transient ? 503 : 422);
-  return NextResponse.json(single);
+  if (!single) return fail(message, status);
+  return NextResponse.json({ ...single, model_used: modelsUsed[0] ?? null });
 }

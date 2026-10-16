@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { generateJson, resolveGeminiModel } from "@/lib/gemini";
 import { DISCLAIMER } from "@/lib/constants";
 import type { MedicineInfo } from "@/lib/types";
 
@@ -145,6 +144,8 @@ export const infoLlmSchema = z.object({
 
 type InfoLlmOutput = z.infer<typeof infoLlmSchema>;
 
+export type { InfoLlmOutput };
+
 function extractJsonObject(text: string): unknown {
   const trimmed = text
     .trim()
@@ -280,30 +281,14 @@ function ensureVerifyHint(value: string): string {
 }
 
 /**
- * Ask the LLM for medicine info from the name + composition (+ catalog
- * grounding) only. Returns the validated payload, or null when the model
- * produced nothing usable after its retries.
+ * Turn validated model output into the stored MedicineInfo payload. `modelUsed`
+ * is the model that actually answered (from callGemini).
  */
-export async function generateMedicineInfo({
-  name,
-  composition,
-  catalog,
-  liveSourceText,
-}: {
-  name: string | null;
-  composition: string[];
-  catalog: CatalogReference[];
-  liveSourceText: string | null;
-}): Promise<MedicineInfo | null> {
-  const parsed = await generateJson<InfoLlmOutput>({
-    systemInstruction: INFO_SYSTEM_INSTRUCTION,
-    userPrompt: buildInfoPrompt({ name, composition, catalog, liveSourceText }),
-    responseSchema: MEDICINE_INFO_JSON_SCHEMA,
-    parse: parseInfoJson,
-  });
-
-  if (!parsed) return null;
-
+export function finalizeMedicineInfo(
+  parsed: InfoLlmOutput,
+  modelUsed: string,
+  liveSourceText: string | null
+): MedicineInfo {
   const liveUsed = liveSourceText !== null;
 
   return {
@@ -323,6 +308,6 @@ export async function generateMedicineInfo({
     source_label: liveUsed ? parsed.source_label : SOURCE_LABEL_NO_LIVE,
     live_source_used: liveUsed,
     generated_at: new Date().toISOString(),
-    model: resolveGeminiModel(),
+    model: modelUsed,
   };
 }

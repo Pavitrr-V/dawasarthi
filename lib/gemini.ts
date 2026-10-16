@@ -1,20 +1,17 @@
-import {
-  EXTRACTION_JSON_SCHEMA,
-  SYSTEM_INSTRUCTION,
-  buildUserPrompt,
-  parseExtractionJson,
-  type MedicineExtraction,
-  type ScanMode,
-} from "@/lib/extraction";
-
-const DEFAULT_MODEL = "gemini-3.8-flash";
+/** Per-model HTTP timeout. Each model in the fallback chain gets this budget. */
 const REQUEST_TIMEOUT_MS = 20_000;
-const MAX_ATTEMPTS = 3;
-const OVERALL_BUDGET_MS = 40_000;
-const MAX_BACKOFF_MS = 8_000;
 
-// Transient statuses worth retrying. 400/401/403/404 are not retryable.
-const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+/** Shown to the user when every model in the chain fails. */
+export const GEMINI_FRIENDLY_ERROR =
+  "Daily limit reached. Please try again later or enter details manually.";
+
+/**
+ * The only statuses that move to the next model. A 20s timeout also moves on.
+ * Everything else (notably 400, 401 and 403) is returned immediately.
+ */
+const FALLBACK_STATUSES = new Set([404, 429, 500, 503]);
+
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 
 const ALLOWED_MIME = new Set([
   "image/jpeg",
@@ -24,26 +21,48 @@ const ALLOWED_MIME = new Set([
   "image/heif",
 ]);
 
+/** Missing/blank configuration (no API key). */
 export class GeminiConfigError extends Error {}
 
+/** A single model returned a fatal (non-fallback) HTTP status. */
 export class GeminiRequestError extends Error {
   readonly status: number | null;
-  readonly retryable: boolean;
-  readonly retryAfterMs?: number;
 
-  constructor(
-    message: string,
-    status: number | null,
-    retryable: boolean,
-    retryAfterMs?: number
-  ) {
+  constructor(message: string, status: number | null) {
     super(message);
     this.name = "GeminiRequestError";
     this.status = status;
-    this.retryable = retryable;
-    this.retryAfterMs = retryAfterMs;
   }
 }
+
+/** Every model in the chain was tried and none produced a usable answer. */
+export class GeminiAllFailedError extends Error {
+  constructor() {
+    super(GEMINI_FRIENDLY_ERROR);
+    this.name = "GeminiAllFailedError";
+  }
+}
+
+export type GeminiImage = {
+  base64: string;
+  mimeType: string;
+};
+
+export type CallGeminiResult<T> = {
+  data: T;
+  model_used: string;
+};
+
+export type CallGeminiArgs<T> = {
+  /** "scan" prefers GEMINI_SCAN_MODELS, "text" uses GEMINI_MODELS. */
+  kind: "scan" | "text";
+  prompt: string;
+  systemInstruction?: string;
+  images?: GeminiImage[];
+  responseSchema: unknown;
+  /** Must return null for anything it does not accept, never throw. */
+  parse: (text: string) => T | null;
+};
 
 function resolveApiKey(): string {
   const key =
@@ -58,9 +77,26 @@ function resolveApiKey(): string {
   return key;
 }
 
-/** The model the LLM calls will use. Read from GEMINI_MODEL server-side only. */
-export function resolveGeminiModel(): string {
-  return process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
+function parseModelList(value?: string | null): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((model) => model.trim())
+    .filter((model) => model.length > 0);
+}
+
+/** Ordered model list for a call. Always non-empty. */
+function getModelList(kind: "scan" | "text"): string[] {
+  let models: string[] = [];
+
+  if (kind === "scan") {
+    models = parseModelList(process.env.GEMINI_SCAN_MODELS);
+    if (models.length === 0) models = parseModelList(process.env.GEMINI_MODELS);
+  } else {
+    models = parseModelList(process.env.GEMINI_MODELS);
+  }
+
+  return models.length > 0 ? models : [DEFAULT_MODEL];
 }
 
 function normalizeMime(mimeType: string): string {
@@ -68,216 +104,149 @@ function normalizeMime(mimeType: string): string {
   return ALLOWED_MIME.has(lower) ? lower : "image/jpeg";
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** Exponential backoff with jitter, capped so we stay inside the budget. */
-function backoffMs(attempt: number, retryAfterMs?: number): number {
-  const exponential = Math.min(MAX_BACKOFF_MS, 400 * 2 ** (attempt - 1));
-  const base = Math.max(exponential, retryAfterMs ?? 0);
-  return Math.min(MAX_BACKOFF_MS, base) + Math.floor(Math.random() * 250);
-}
-
-function parseRetryAfter(header: string | null): number | undefined {
-  if (!header) return undefined;
-  const seconds = Number(header);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(header);
-  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
-  return undefined;
-}
-
-function toGeminiRequestError(error: unknown): GeminiRequestError {
-  if (error instanceof GeminiRequestError) return error;
-  return new GeminiRequestError(
-    error instanceof Error ? error.message : "network error",
-    null,
-    true
-  );
-}
-
-type GeminiImage = { base64: string; mimeType: string };
-
 /**
- * Generic structured-output call to Gemini Flash.
+ * The one place Gemini is called. Tries each configured model in order and
+ * returns the first usable, schema-valid answer.
  *
- * Retries transient failures (429/5xx/network/timeout) AND output the parser
- * rejects, with exponential backoff. Returns null only when the model
- * genuinely answered with something `parse` cannot accept. Throws
- * GeminiRequestError when the API stayed unavailable and GeminiConfigError
- * when the key is missing.
+ * Fallback rules:
+ *  - Move to the next model only on HTTP 404/429/500/503 or a 20s timeout.
+ *  - 400/401/403 (and any other status) is thrown immediately as a
+ *    GeminiRequestError.
+ *  - Invalid JSON / zod failure retries ONCE on the next model, then gives up.
+ *  - If every model fails, a GeminiAllFailedError with the friendly message.
  *
- * `parse` must return null for anything it does not accept, and must not
- * throw for a bad-but-parseable response.
+ * The API key and image bytes are never logged.
  */
-export async function generateJson<T>({
+export async function callGemini<T>({
+  kind,
+  prompt,
   systemInstruction,
-  userPrompt,
+  images,
   responseSchema,
   parse,
-  image,
-}: {
-  systemInstruction: string;
-  userPrompt: string;
-  responseSchema: unknown;
-  parse: (text: string) => T | null;
-  image?: GeminiImage;
-}): Promise<T | null> {
+}: CallGeminiArgs<T>): Promise<CallGeminiResult<T>> {
   const apiKey = resolveApiKey();
-  const model = resolveGeminiModel();
-  const startedAt = Date.now();
+  const models = getModelList(kind);
 
-  let lastError: GeminiRequestError | null = null;
-  let lastRetryAfterMs: number | undefined;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const text = await postGenerateContent({
-        apiKey,
-        model,
-        systemInstruction,
-        parts: [
-          { text: userPrompt },
-          ...(image
-            ? [
-                {
-                  inlineData: {
-                    mimeType: normalizeMime(image.mimeType),
-                    data: image.base64,
-                  },
-                },
-              ]
-            : []),
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema,
-        },
-      });
-
-      if (text !== null) {
-        const parsed = parse(text);
-        if (parsed !== null) return parsed;
-        console.warn(`[gemini] unparseable JSON (attempt ${attempt})`);
-      } else {
-        console.warn(`[gemini] empty response (attempt ${attempt})`);
-      }
-    } catch (error) {
-      const geminiError = toGeminiRequestError(error);
-      lastError = geminiError;
-      lastRetryAfterMs = geminiError.retryAfterMs;
-
-      if (!geminiError.retryable) throw geminiError;
-
-      console.warn(
-        `[gemini] attempt ${attempt}/${MAX_ATTEMPTS} failed: ${geminiError.message}`
-      );
-    }
-
-    const outOfTime = Date.now() - startedAt > OVERALL_BUDGET_MS;
-    if (attempt < MAX_ATTEMPTS && !outOfTime) {
-      await sleep(backoffMs(attempt, lastRetryAfterMs));
-      lastRetryAfterMs = undefined;
-    } else {
-      break;
-    }
-  }
-
-  // A transport/API error is more important to surface than "unreadable".
-  if (lastError) throw lastError;
-  return null;
-}
-
-/**
- * Send one image to Gemini Flash and return the structured medicine
- * extraction. Kept as a thin wrapper so /api/extract is unchanged.
- */
-export async function extractMedicineFromImage({
-  base64,
-  mimeType,
-  mode,
-}: {
-  base64: string;
-  mimeType: string;
-  mode: ScanMode;
-}): Promise<MedicineExtraction | null> {
-  return generateJson<MedicineExtraction>({
-    systemInstruction: SYSTEM_INSTRUCTION,
-    userPrompt: buildUserPrompt(mode),
-    responseSchema: EXTRACTION_JSON_SCHEMA,
-    parse: parseExtractionJson,
-    image: { base64, mimeType },
-  });
-}
-
-async function postGenerateContent({
-  apiKey,
-  model,
-  systemInstruction,
-  parts,
-  generationConfig,
-}: {
-  apiKey: string;
-  model: string;
-  systemInstruction: string;
-  parts: unknown[];
-  generationConfig: Record<string, unknown>;
-}): Promise<string | null> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
+  const parts: Array<Record<string, unknown>> = [{ text: prompt }];
+  for (const image of images ?? []) {
+    parts.push({
+      inlineData: {
+        mimeType: normalizeMime(image.mimeType),
+        data: image.base64,
       },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ role: "user", parts }],
-        generationConfig,
-      }),
-      signal: controller.signal,
     });
-  } catch (error) {
-    const aborted = error instanceof Error && error.name === "AbortError";
-    throw new GeminiRequestError(
-      aborted ? "Gemini request timed out" : "Gemini network error",
-      null,
-      true
-    );
-  } finally {
+  }
+
+  let validationRetried = false;
+
+  for (let i = 0; i < models.length; i += 1) {
+    const model = models[i];
+    const isLast = i === models.length - 1;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            ...(systemInstruction
+              ? { systemInstruction: { parts: [{ text: systemInstruction }] } }
+              : {}),
+            contents: [{ role: "user", parts }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema,
+            },
+          }),
+          signal: controller.signal,
+        }
+      );
+    } catch (error) {
+      clearTimeout(timeout);
+      const aborted = error instanceof Error && error.name === "AbortError";
+      console.warn(
+        `[gemini] model ${model} ${aborted ? `timed out after ${REQUEST_TIMEOUT_MS}ms` : "network error"}; trying next`
+      );
+      if (isLast) break;
+      continue;
+    }
     clearTimeout(timeout);
+
+    if (!response.ok) {
+      const status = response.status;
+      const detail = (await response.text().catch(() => "")).slice(0, 200);
+
+      if (!FALLBACK_STATUSES.has(status)) {
+        console.warn(
+          `[gemini] model ${model} failed with fatal status ${status}; not falling back`
+        );
+        throw new GeminiRequestError(
+          `Gemini ${status}: ${detail || response.statusText}`,
+          status
+        );
+      }
+
+      console.warn(`[gemini] model ${model} failed with status ${status}; trying next`);
+      if (isLast) break;
+      continue;
+    }
+
+    const payload = (await response.json().catch(() => null)) as {
+      promptFeedback?: { blockReason?: string };
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    } | null;
+
+    if (!payload) {
+      console.warn(`[gemini] model ${model} returned an unreadable body; trying next`);
+      if (isLast) break;
+      continue;
+    }
+
+    if (payload.promptFeedback?.blockReason) {
+      console.warn(
+        `[gemini] model ${model} blocked the prompt (${payload.promptFeedback.blockReason}); trying next`
+      );
+      if (isLast) break;
+      continue;
+    }
+
+    const text = (payload.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? "")
+      .join("")
+      .trim();
+
+    if (text.length === 0) {
+      console.warn(`[gemini] model ${model} returned an empty response; trying next`);
+      if (isLast) break;
+      continue;
+    }
+
+    const parsed = parse(text);
+    if (parsed !== null) {
+      console.warn(`[gemini] model ${model} answered successfully`);
+      return { data: parsed, model_used: model };
+    }
+
+    // Invalid JSON or failed zod validation: retry ONCE on the next model.
+    if (!validationRetried && !isLast) {
+      validationRetried = true;
+      console.warn(
+        `[gemini] model ${model} returned invalid output; retrying once on the next model`
+      );
+      continue;
+    }
+    console.warn(`[gemini] model ${model} returned invalid output; no retries left`);
+    break;
   }
 
-  if (!response.ok) {
-    const detail = (await response.text().catch(() => "")).slice(0, 200);
-    const retryable = RETRYABLE_STATUS.has(response.status);
-    throw new GeminiRequestError(
-      `Gemini ${response.status}: ${detail || response.statusText}`,
-      response.status,
-      retryable,
-      parseRetryAfter(response.headers.get("retry-after"))
-    );
-  }
-
-  const payload = (await response.json()) as {
-    promptFeedback?: { blockReason?: string };
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-
-  if (payload.promptFeedback?.blockReason) return null;
-
-  const partsOut = payload.candidates?.[0]?.content?.parts ?? [];
-  const text = partsOut
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
-
-  return text.length > 0 ? text : null;
+  throw new GeminiAllFailedError();
 }
