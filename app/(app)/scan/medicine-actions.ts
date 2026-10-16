@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth";
 import { getSelectedPatient } from "@/lib/patients";
+import { recomputeMedicineRisk } from "@/lib/risk-recompute";
 import {
   flaggedFields,
   medicineInputSchema,
@@ -70,13 +71,13 @@ export async function saveMedicine(
       manufacturer: data.manufacturer,
       strip_image_path: data.strip_image_path,
       box_image_path: data.box_image_path,
-      // TODO(Phase 3): lib/risk.ts does not exist yet, so the deterministic
-      // rules engine cannot produce a verdict here. The column is
-      // `not null check (risk_level in ('green','amber','red'))`, so we store
-      // the amber placeholder and mark the row as pending. Replace both with
-      // the real verdict + reasons once the engine ships.
-      risk_level: "amber", // TODO(Phase 3): risk_level from lib/risk.ts.
-      risk_reasons: [], // TODO(Phase 3): risk_reasons from lib/risk.ts.
+      // Placeholder verdict; replaced immediately below by the deterministic
+      // engine (lib/risk.ts) via recomputeMedicineRisk, which also runs
+      // matchAlerts against the official NSQ alerts. The column is
+      // `not null check (risk_level in ('green','amber','red'))`, so a value
+      // must be present at insert time.
+      risk_level: "amber",
+      risk_reasons: [],
       info: {
         confidence: data.confidence,
         verify_fields: flaggedFields(data.confidence),
@@ -84,7 +85,7 @@ export async function saveMedicine(
         source: data.source,
         storage_notes: data.storage_notes,
         // Barcode flow only: false = the code did not match medicine_catalog,
-        // which Phase 3 should treat as an AMBER risk flag.
+        // which the risk engine treats as an AMBER flag.
         ...(typeof data.dataset_match === "boolean"
           ? { dataset_match: data.dataset_match }
           : {}),
@@ -104,6 +105,18 @@ export async function saveMedicine(
       hint: error?.hint,
     });
     return { ok: false, error: "Could not save the medicine. Please try again." };
+  }
+
+  // Compute + persist the deterministic verdict now (DB only, no TinyFish), so
+  // the trust card opens on the correct colour. This must never block saving:
+  // any failure is swallowed and the card recomputes on mount anyway.
+  try {
+    await recomputeMedicineRisk(inserted.id as string);
+  } catch (recomputeError) {
+    console.error("[saveMedicine] risk recompute failed", {
+      message:
+        recomputeError instanceof Error ? recomputeError.message : recomputeError,
+    });
   }
 
   revalidatePath("/", "layout");

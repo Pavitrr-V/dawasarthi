@@ -355,15 +355,24 @@ export function TrustCard({
                   <p className="text-[14px] leading-snug text-slate-500">
                     {reason.message_hi}
                   </p>
-                  {reason.source_url && (
-                    <a
-                      href={reason.source_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-0.5 inline-block text-[13px] font-semibold text-primary-700 underline"
-                    >
-                      Source
-                    </a>
+                  {(reason.source_url || reason.demo) && (
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                      {reason.demo && (
+                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-bold tracking-wide text-slate-600 uppercase">
+                          Demo data
+                        </span>
+                      )}
+                      {reason.source_url && (
+                        <a
+                          href={reason.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[13px] font-semibold text-primary-700 underline"
+                        >
+                          Source
+                        </a>
+                      )}
+                    </div>
                   )}
                 </div>
               </li>

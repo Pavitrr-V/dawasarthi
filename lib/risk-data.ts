@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { matchAlerts } from "@/lib/alerts";
 import {
   type AlertMatch,
   type OnlineCheck,
@@ -112,55 +113,18 @@ export function secondSideFromInfo(info: unknown): PackSide | null {
 // NSQ alerts
 // ---------------------------------------------------------------------------
 
-function isAlertMatchType(value: unknown): value is AlertMatch["matchType"] {
-  return value === "name_and_batch" || value === "name_only";
-}
-
 /**
- * Fuzzy-matches the medicine name (and batch) against nsq_alerts. Returns []
- * when the medicine has no usable name, the RPC is missing, or anything else
- * goes wrong.
+ * Fuzzy-matches the medicine name (and batch) against nsq_alerts via the
+ * shared `matchAlerts` helper, which owns the single 2-arg RPC contract
+ * (match_nsq_alerts(p_name, p_threshold)) and the name_and_batch vs name_only
+ * decision. Returns [] when the name is too short or the RPC is missing.
  */
 export async function loadAlertMatches(
   supabase: SupabaseClient,
   name: string,
   batchNo: string | null
 ): Promise<AlertMatch[]> {
-  if (name.trim().length < 3) return [];
-
-  try {
-    const { data, error } = await supabase.rpc("match_nsq_alerts", {
-      p_product_name: name,
-      p_batch_no: batchNo,
-      p_threshold: 0.4,
-      p_limit: 5,
-    });
-    if (error || !Array.isArray(data)) return [];
-
-    return data.flatMap((row) => {
-      const record = asRecord(row);
-      if (!record) return [];
-      const matchType = record.match_type;
-      if (!isAlertMatchType(matchType)) return [];
-      const alertType = textOrNull(record.alert_type) ?? "other";
-      const productName = textOrNull(record.product_name);
-      if (!productName) return [];
-      const alertDate = textOrNull(record.alert_date) ?? "";
-      const sourceUrl = textOrNull(record.source_url) ?? "";
-      return [
-        {
-          alert_type: alertType,
-          product_name: productName,
-          batch_no: textOrNull(record.batch_no),
-          alert_date: alertDate,
-          source_url: sourceUrl,
-          matchType,
-        } satisfies AlertMatch,
-      ];
-    });
-  } catch {
-    return [];
-  }
+  return matchAlerts(supabase, { name, batch_no: batchNo });
 }
 
 // ---------------------------------------------------------------------------

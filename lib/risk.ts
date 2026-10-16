@@ -27,6 +27,8 @@ export type RiskReason = {
   message_hi: string;
   /** Present when the reason is backed by a web source (alert / online check). */
   source_url?: string;
+  /** True when the backing alert is demo/seed data (shows a "Demo data" label). */
+  demo?: boolean;
 };
 
 export type RiskResult = {
@@ -45,6 +47,8 @@ export type AlertMatch = {
   alert_date: string;
   source_url: string;
   matchType: "name_and_batch" | "name_only";
+  /** True when the alert row is demo/seed data (nsq_alerts.raw.demo === true). */
+  demo?: boolean;
 };
 
 export type OnlineCheckStatus = "pending" | "found" | "not_found" | "error";
@@ -395,6 +399,7 @@ export function evaluateRisk(input: RiskInput): RiskResult {
         message_en: `Official safety alert for this batch: ${alertTypeLabel(alert.alert_type)} on ${alert.alert_date}.`,
         message_hi: `इस बैच के लिए आधिकारिक सुरक्षा चेतावनी: ${alertTypeLabel(alert.alert_type)}, ${alert.alert_date}।`,
         source_url: alert.source_url,
+        ...(alert.demo ? { demo: true } : {}),
       });
     } else if (alert.matchType === "name_only" && !nameOnlyAlertAdded) {
       // Never changes the colour; the batch itself is not listed.
@@ -407,6 +412,7 @@ export function evaluateRisk(input: RiskInput): RiskResult {
         message_hi:
           "इस दवा के अन्य बैचों पर चेतावनी थी; आपका बैच सूची में नहीं है।",
         source_url: alert.source_url,
+        ...(alert.demo ? { demo: true } : {}),
       });
     }
   }
