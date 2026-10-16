@@ -142,3 +142,21 @@ export function BellIcon(props: IconProps) {
     </Svg>
   );
 }
+
+export function BookIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5Z" />
+      <path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20" />
+    </Svg>
+  );
+}
+
+export function PillIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2.5" y="8.5" width="19" height="7" rx="3.5" transform="rotate(-45 12 12)" />
+      <path d="M8.5 8.5l7 7" />
+    </Svg>
+  );
+}

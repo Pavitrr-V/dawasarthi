@@ -58,7 +58,8 @@ function resolveApiKey(): string {
   return key;
 }
 
-function resolveModel(): string {
+/** The model the LLM calls will use. Read from GEMINI_MODEL server-side only. */
+export function resolveGeminiModel(): string {
   return process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
 }
 
@@ -87,27 +88,44 @@ function parseRetryAfter(header: string | null): number | undefined {
   return undefined;
 }
 
+function toGeminiRequestError(error: unknown): GeminiRequestError {
+  if (error instanceof GeminiRequestError) return error;
+  return new GeminiRequestError(
+    error instanceof Error ? error.message : "network error",
+    null,
+    true
+  );
+}
+
+type GeminiImage = { base64: string; mimeType: string };
+
 /**
- * Send one image to Gemini Flash and return the structured extraction.
+ * Generic structured-output call to Gemini Flash.
  *
- * Retries transient failures (429/5xx/network/timeout and invalid JSON) with
- * exponential backoff. Returns null only when the model genuinely answered
- * with something we cannot parse (i.e. the photo is unreadable). Throws
- * GeminiRequestError when the API stayed unavailable, and GeminiConfigError
+ * Retries transient failures (429/5xx/network/timeout) AND output the parser
+ * rejects, with exponential backoff. Returns null only when the model
+ * genuinely answered with something `parse` cannot accept. Throws
+ * GeminiRequestError when the API stayed unavailable and GeminiConfigError
  * when the key is missing.
+ *
+ * `parse` must return null for anything it does not accept, and must not
+ * throw for a bad-but-parseable response.
  */
-export async function extractMedicineFromImage({
-  base64,
-  mimeType,
-  mode,
+export async function generateJson<T>({
+  systemInstruction,
+  userPrompt,
+  responseSchema,
+  parse,
+  image,
 }: {
-  base64: string;
-  mimeType: string;
-  mode: ScanMode;
-}): Promise<MedicineExtraction | null> {
+  systemInstruction: string;
+  userPrompt: string;
+  responseSchema: unknown;
+  parse: (text: string) => T | null;
+  image?: GeminiImage;
+}): Promise<T | null> {
   const apiKey = resolveApiKey();
-  const model = resolveModel();
-  const safeMime = normalizeMime(mimeType);
+  const model = resolveGeminiModel();
   const startedAt = Date.now();
 
   let lastError: GeminiRequestError | null = null;
@@ -115,30 +133,38 @@ export async function extractMedicineFromImage({
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      const { text } = await callGemini({
+      const text = await postGenerateContent({
         apiKey,
         model,
-        base64,
-        mimeType: safeMime,
-        mode,
+        systemInstruction,
+        parts: [
+          { text: userPrompt },
+          ...(image
+            ? [
+                {
+                  inlineData: {
+                    mimeType: normalizeMime(image.mimeType),
+                    data: image.base64,
+                  },
+                },
+              ]
+            : []),
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema,
+        },
       });
 
-      if (text === null) {
-        console.warn(`[gemini] empty response (attempt ${attempt})`);
-      } else {
-        const parsed = parseExtractionJson(text);
-        if (parsed) return parsed;
+      if (text !== null) {
+        const parsed = parse(text);
+        if (parsed !== null) return parsed;
         console.warn(`[gemini] unparseable JSON (attempt ${attempt})`);
+      } else {
+        console.warn(`[gemini] empty response (attempt ${attempt})`);
       }
     } catch (error) {
-      const geminiError =
-        error instanceof GeminiRequestError
-          ? error
-          : new GeminiRequestError(
-              error instanceof Error ? error.message : "network error",
-              null,
-              true
-            );
+      const geminiError = toGeminiRequestError(error);
       lastError = geminiError;
       lastRetryAfterMs = geminiError.retryAfterMs;
 
@@ -163,19 +189,41 @@ export async function extractMedicineFromImage({
   return null;
 }
 
-async function callGemini({
-  apiKey,
-  model,
+/**
+ * Send one image to Gemini Flash and return the structured medicine
+ * extraction. Kept as a thin wrapper so /api/extract is unchanged.
+ */
+export async function extractMedicineFromImage({
   base64,
   mimeType,
   mode,
 }: {
-  apiKey: string;
-  model: string;
   base64: string;
   mimeType: string;
   mode: ScanMode;
-}): Promise<{ text: string | null }> {
+}): Promise<MedicineExtraction | null> {
+  return generateJson<MedicineExtraction>({
+    systemInstruction: SYSTEM_INSTRUCTION,
+    userPrompt: buildUserPrompt(mode),
+    responseSchema: EXTRACTION_JSON_SCHEMA,
+    parse: parseExtractionJson,
+    image: { base64, mimeType },
+  });
+}
+
+async function postGenerateContent({
+  apiKey,
+  model,
+  systemInstruction,
+  parts,
+  generationConfig,
+}: {
+  apiKey: string;
+  model: string;
+  systemInstruction: string;
+  parts: unknown[];
+  generationConfig: Record<string, unknown>;
+}): Promise<string | null> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   const controller = new AbortController();
@@ -190,20 +238,9 @@ async function callGemini({
         "x-goog-api-key": apiKey,
       },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: buildUserPrompt(mode) },
-              { inlineData: { mimeType, data: base64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: EXTRACTION_JSON_SCHEMA,
-        },
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: [{ role: "user", parts }],
+        generationConfig,
       }),
       signal: controller.signal,
     });
@@ -234,13 +271,13 @@ async function callGemini({
     candidates?: { content?: { parts?: { text?: string }[] } }[];
   };
 
-  if (payload.promptFeedback?.blockReason) return { text: null };
+  if (payload.promptFeedback?.blockReason) return null;
 
-  const parts = payload.candidates?.[0]?.content?.parts ?? [];
-  const text = parts
+  const partsOut = payload.candidates?.[0]?.content?.parts ?? [];
+  const text = partsOut
     .map((part) => part.text ?? "")
     .join("")
     .trim();
 
-  return { text: text.length > 0 ? text : null };
+  return text.length > 0 ? text : null;
 }

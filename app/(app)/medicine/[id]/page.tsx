@@ -7,6 +7,7 @@ import { evaluateRisk, daysToExpiry } from "@/lib/risk";
 import { buildRiskContext, MEDICINE_RISK_COLUMNS, type MedicineRiskRow } from "@/lib/risk-data";
 import { Card, PageHeader } from "@/components/ui";
 import { TrustCard } from "@/components/medicine/trust-card";
+import { MedicineInfoPanel } from "@/components/medicine/medicine-info-panel";
 import { MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
 
 export const instant = false;
@@ -153,6 +154,8 @@ export default async function MedicinePage({
 
   const infoPanel = (
     <div className="space-y-4">
+      <MedicineInfoPanel medicineId={medicine.id} />
+
       <Card className="space-y-3">
         <p className="text-sm font-semibold tracking-wide text-slate-500 uppercase">
           Printed details
