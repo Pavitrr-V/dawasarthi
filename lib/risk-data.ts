@@ -153,7 +153,7 @@ export async function loadOnlineCheck(
     const { data, error } = await supabase
       .from("online_verifications")
       .select(
-        "status, listed_mrp, listed_manufacturer, source_url, confidence, fetched_at, created_at"
+        "status, listed_mrp, listed_manufacturer, source_url, confidence, fetched_at, created_at, raw"
       )
       .eq("medicine_id", medicineId)
       .order("created_at", { ascending: false })
@@ -172,6 +172,7 @@ export async function loadOnlineCheck(
       listed_manufacturer: textOrNull(row.listed_manufacturer),
       source_url: textOrNull(row.source_url),
       confidence: numberOrNull(row.confidence),
+      ...(asRecord(row.raw)?.demo === true ? { demo: true } : {}),
     };
 
     const lastCheckedAt = textOrNull(row.fetched_at);

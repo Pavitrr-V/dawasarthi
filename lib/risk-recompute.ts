@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { evaluateRisk, type RiskResult } from "@/lib/risk";
@@ -14,9 +15,11 @@ import {
  *   - POST /api/risk/recompute (the trust card's live refresh), and
  *   - the scan/manual save action, right after a medicine is inserted.
  *
- * It runs with the *caller's* Supabase client, so RLS enforces ownership: a
- * user can only read/update their own medicine. Returns null when the medicine
- * does not exist or is not visible to the caller.
+ * `recomputeMedicineRisk` runs with the *caller's* Supabase client, so RLS
+ * enforces ownership: a user can only read/update their own medicine.
+ * `recomputeMedicineRiskWith` accepts any client (e.g. the service-role client
+ * used by the verify cron) so finishing a background job can recompute too.
+ * Both return null when the medicine does not exist or is not visible.
  */
 
 export type RecomputeOutcome = {
@@ -26,11 +29,11 @@ export type RecomputeOutcome = {
   saved: boolean;
 };
 
-export async function recomputeMedicineRisk(
+/** Recomputes using an explicit client (RLS still applies to non-admin ones). */
+export async function recomputeMedicineRiskWith(
+  supabase: SupabaseClient,
   medicineId: string
 ): Promise<RecomputeOutcome | null> {
-  const supabase = await createClient();
-
   const { data, error } = await supabase
     .from("medicines")
     .select(MEDICINE_RISK_COLUMNS)
@@ -61,4 +64,11 @@ export async function recomputeMedicineRisk(
     .eq("id", medicineId);
 
   return { result, context, saved: !updateError };
+}
+
+export async function recomputeMedicineRisk(
+  medicineId: string
+): Promise<RecomputeOutcome | null> {
+  const supabase = await createClient();
+  return recomputeMedicineRiskWith(supabase, medicineId);
 }

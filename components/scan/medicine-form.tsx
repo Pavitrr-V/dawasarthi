@@ -120,11 +120,10 @@ export function MedicineForm({
       // The reviewed extraction is stored in the database now.
       clearReviewPayload();
 
-      // TODO(Phase 3B): /api/verify/start does not exist yet, so this request
-      // is expected to 404. It is deliberately fire-and-forget: we never await
-      // it and swallow every failure, because saving must succeed even when
-      // the online check cannot be started. The trust card shows
-      // "Online check running…" until the route ships.
+      // Kick off the online (TinyFish) verification in the background. It is
+      // deliberately fire-and-forget: we never await it and swallow every
+      // failure, because saving must succeed even when the online check cannot
+      // be started. The trust card shows "Checking…" until it settles.
       void fetch("/api/verify/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Card } from "@/components/ui";
 import {
@@ -16,6 +17,7 @@ import {
   XCircleIcon,
 } from "@/components/icons";
 import { MedicineActions } from "@/components/medicine/medicine-actions";
+import { VerifyStatus } from "@/components/medicine/verify-status";
 import { DISCLAIMER } from "@/lib/constants";
 import type { RiskLevel, RiskReason, RiskSeverity } from "@/lib/risk";
 
@@ -35,6 +37,8 @@ export type TrustCardProps = {
   onlineStatus: OnlineChipStatus;
   jobStatus: JobStatus | null;
   lastCheckedAt: string | null;
+  /** True when the latest online check is seed/demo data. */
+  onlineDemo: boolean;
   expiresInDays: number | null;
   /** Times offered by the "Set reminder" sheet, from the patient profile. */
   reminderTimes: { label: string; time: string }[];
@@ -145,9 +149,6 @@ type RecomputeResponse = {
   lastCheckedAt?: string | null;
 };
 
-const POLL_MS = 8000;
-const MAX_POLLS = 15;
-
 /**
  * Formats "Last checked" deterministically (fixed timezone) so the server
  * render and the client hydration always agree.
@@ -170,10 +171,10 @@ function formatCheckedAt(iso: string | null): string | null {
  *
  * The verdict colour is always decided by the deterministic engine on the
  * server (initial props) and refreshed through POST /api/risk/recompute. It
- * subscribes to Supabase Realtime on online_verifications and tinyfish_jobs so
- * that, the moment TinyFish writes a result, the card recomputes and recolours
- * without a manual refresh. A short poll backs up Realtime when it is not
- * enabled on the project yet.
+ * subscribes to Supabase Realtime on online_verifications so that, the moment
+ * TinyFish writes a result, the card recomputes and recolours without a manual
+ * refresh. While a check is still running it also renders <VerifyStatus>, which
+ * polls GET /api/verify/status as a fallback when Realtime is unavailable.
  */
 export function TrustCard({
   medicineId,
@@ -183,6 +184,7 @@ export function TrustCard({
   onlineStatus: initialOnlineStatus,
   jobStatus: initialJobStatus,
   lastCheckedAt: initialLastCheckedAt,
+  onlineDemo,
   expiresInDays,
   reminderTimes,
   hasStripImage,
@@ -201,6 +203,7 @@ export function TrustCard({
     initialLastCheckedAt
   );
   const [tab, setTab] = useState<"info" | "safety">("info");
+  const router = useRouter();
 
   const recompute = useCallback(async () => {
     try {
@@ -239,7 +242,9 @@ export function TrustCard({
     }, 700);
   }, [recompute]);
 
-  // Realtime: new online_verifications / tinyfish_jobs rows for this medicine.
+  // Realtime: new online_verifications rows for this medicine. tinyfish_jobs is
+  // intentionally NOT subscribed to: the client has no need to read job rows
+  // (the status route is the only reader), so we keep the surface minimal.
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase
@@ -250,16 +255,6 @@ export function TrustCard({
           event: "*",
           schema: "public",
           table: "online_verifications",
-          filter: `medicine_id=eq.${medicineId}`,
-        },
-        scheduledRecompute
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "tinyfish_jobs",
           filter: `medicine_id=eq.${medicineId}`,
         },
         scheduledRecompute
@@ -288,28 +283,21 @@ export function TrustCard({
     };
   }, []);
 
-  // Back-up poll while a check is still in flight.
-  useEffect(() => {
-    const pending =
-      onlineStatus === "checking" ||
-      jobStatus === "queued" ||
-      jobStatus === "running";
-    if (!pending) return;
-
-    let attempts = 0;
-    const timer = window.setInterval(() => {
-      attempts += 1;
-      void recompute();
-      if (attempts >= MAX_POLLS) window.clearInterval(timer);
-    }, POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [onlineStatus, jobStatus, recompute]);
+  // Called by <VerifyStatus> once a check finishes: recompute the verdict and
+  // refresh the server-rendered panels.
+  const handleSettled = useCallback(() => {
+    void recompute();
+    router.refresh();
+  }, [recompute, router]);
 
   const style = LEVEL_STYLES[level];
   const expiry = useMemo(() => expiryChip(expiresInDays), [expiresInDays]);
   const checkedLabel = useMemo(() => formatCheckedAt(lastCheckedAt), [lastCheckedAt]);
   const online = onlineText(onlineStatus);
-  const checking = onlineStatus === "checking";
+  const checking =
+    onlineStatus === "checking" ||
+    jobStatus === "queued" ||
+    jobStatus === "running";
 
   return (
     <div className="space-y-4">
@@ -392,14 +380,11 @@ export function TrustCard({
             Online checks
           </p>
           {checking && (
-            <span className="flex items-center gap-1.5 text-[13px] font-medium text-sky-700">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-sky-500" />
-              Checking…
-            </span>
+            <VerifyStatus medicineId={medicineId} onSettled={handleSettled} />
           )}
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Chip
             label="Official alerts"
             value={alertCount > 0 ? `${alertCount} found` : "Checked"}
@@ -415,6 +400,11 @@ export function TrustCard({
             value={checkedLabel ?? "Not yet"}
             tone="bg-slate-100 text-slate-600"
           />
+          {onlineDemo && (
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-bold tracking-wide text-slate-600 uppercase">
+              Demo data
+            </span>
+          )}
         </div>
       </Card>
 

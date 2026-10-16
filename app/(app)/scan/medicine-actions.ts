@@ -18,7 +18,7 @@ export type SaveMedicineResult =
 /**
  * Saves a reviewed/manual medicine for the currently selected patient profile.
  * The client then redirects to /medicine/[id] and fires /api/verify/start
- * (Phase 3B) without waiting for it.
+ * (online check) without waiting for it.
  */
 export async function saveMedicine(
   input: MedicineInput
@@ -89,8 +89,8 @@ export async function saveMedicine(
         ...(typeof data.dataset_match === "boolean"
           ? { dataset_match: data.dataset_match }
           : {}),
-        // TODO(Phase 3B): /api/verify/start will move this through
-        // queued -> running -> done and fill online_verifications.
+        // The online check moves this through pending -> found/not_found/error
+        // and fills online_verifications (see /api/verify/start).
         verify_status: "pending",
       },
     })

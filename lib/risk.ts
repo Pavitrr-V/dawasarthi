@@ -61,6 +61,8 @@ export type OnlineCheck = {
   source_url?: string | null;
   /** 0..1 confidence from the fetch/extraction. */
   confidence?: number | null;
+  /** True when the row is seed/demo data (online_verifications.raw.demo === true). */
+  demo?: boolean;
 };
 
 /** The other face of the pack (the box when the primary capture was the strip). */

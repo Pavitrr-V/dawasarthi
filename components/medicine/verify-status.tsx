@@ -1,33 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
-const POLL_MS = 6000;
-const MAX_ATTEMPTS = 10;
+const POLL_MS = 5000;
+const MAX_POLLS = 24; // ~2 minutes
 
 /**
- * Phase 3B placeholder.
+ * Fallback poll used while an online check is in flight.
  *
- * Saving a medicine fires POST /api/verify/start without waiting for it, so
- * the trust card starts in a "running" state. This component polls the (not
- * yet built) status route and refreshes the server-rendered trust card once
- * the online check finishes.
- *
- * TODO(Phase 3B): /api/verify/start and /api/verify/status do not exist yet.
- * While they are missing the poll answers 404, which is ignored on purpose,
- * so the card keeps showing "Online check running…".
+ * Saving a medicine fires POST /api/verify/start without waiting for it, so the
+ * trust card starts in a "checking" state. Realtime normally delivers the
+ * result, but when it is not enabled this component polls GET /api/verify/status
+ * every POLL_MS until the job finishes (or MAX_POLLS is reached) and then calls
+ * `onSettled` so the card can recompute its verdict.
  */
-export function VerifyStatus({ medicineId }: { medicineId: string }) {
-  const router = useRouter();
-  const [timedOut, setTimedOut] = useState(false);
-
+export function VerifyStatus({
+  medicineId,
+  onSettled,
+}: {
+  medicineId: string;
+  onSettled: () => void;
+}) {
   useEffect(() => {
-    let cancelled = false;
     let attempts = 0;
+    let stopped = false;
 
-    async function check() {
-      if (cancelled) return;
+    const tick = async () => {
+      if (stopped) return;
       attempts += 1;
       try {
         const response = await fetch(
@@ -35,48 +34,40 @@ export function VerifyStatus({ medicineId }: { medicineId: string }) {
           { cache: "no-store" }
         );
         if (response.ok) {
-          const body = (await response.json()) as { status?: string };
-          if (body.status === "done" || body.status === "failed") {
-            cancelled = true;
+          const body = (await response.json()) as {
+            status?: string;
+            finished?: boolean;
+          };
+          if (body.finished === true || body.status === "done" || body.status === "failed") {
+            stopped = true;
             window.clearInterval(timer);
-            router.refresh();
+            onSettled();
             return;
           }
         }
-        // Every other response (including 404 while the route is unbuilt) is
-        // ignored: we try again on the next tick.
       } catch {
         // Offline: try again on the next tick.
       }
 
-      if (!cancelled && attempts >= MAX_ATTEMPTS) {
+      if (attempts >= MAX_POLLS) {
+        stopped = true;
         window.clearInterval(timer);
-        setTimedOut(true);
       }
-    }
+    };
 
-    const timer = window.setInterval(check, POLL_MS);
-    check();
+    const timer = window.setInterval(tick, POLL_MS);
+    void tick();
 
     return () => {
-      cancelled = true;
+      stopped = true;
       window.clearInterval(timer);
     };
-  }, [medicineId, router]);
-
-  if (timedOut) {
-    return (
-      <p className="text-sm text-slate-500">
-        Online check is taking longer than expected. Refresh the page in a
-        moment.
-      </p>
-    );
-  }
+  }, [medicineId, onSettled]);
 
   return (
-    <p className="flex items-center gap-2 text-[15px] font-medium text-primary-700">
-      <span className="h-2 w-2 animate-pulse rounded-full bg-primary-500" />
-      Online check running…
-    </p>
+    <span className="flex items-center gap-1.5 text-[13px] font-medium text-sky-700">
+      <span className="h-2 w-2 animate-pulse rounded-full bg-sky-500" />
+      Checking…
+    </span>
   );
 }

@@ -301,6 +301,7 @@ export default async function MedicinePage({
         onlineStatus={context.onlineStatus}
         jobStatus={context.jobStatus}
         lastCheckedAt={context.lastCheckedAt}
+        onlineDemo={context.onlineCheck?.demo === true}
         expiresInDays={expiresInDays}
         reminderTimes={mealTimes}
         hasStripImage={Boolean(medicine.strip_image_path)}
