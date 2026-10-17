@@ -196,6 +196,20 @@ export function NotificationSettings() {
       if (!response.ok) {
         throw new Error(result.error ?? "Could not send the test notification.");
       }
+      if (result.skipped === "error") {
+        setFeedback({
+          tone: "error",
+          text: "Server could not read subscriptions. Please try again later.",
+        });
+        return;
+      }
+      if (result.skipped === "disabled") {
+        setFeedback({
+          tone: "info",
+          text: "Push is not configured on the server.",
+        });
+        return;
+      }
       if (result.skipped === "no-subscriptions" || result.sent === 0) {
         setFeedback({
           tone: "info",

@@ -7,9 +7,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
  * service-role client, so never import it from a client component.
  *
  * `sendPushToUser` fans a payload out to every stored subscription and prunes
- * the subscriptions the push service reports as gone (404/410). A missing key
- * or an empty subscription list is reported (never thrown) so callers such as
- * the reminder loop keep running.
+ * the subscriptions the push service reports as gone (404/410). A missing key,
+ * an empty subscription list, or a failed subscription read is reported (never
+ * thrown) so callers such as the reminder loop keep running.
  */
 
 export type PushNotificationPayload = {
@@ -34,7 +34,7 @@ export type PushSendResult = {
   failed: number;
   /** Subscriptions deleted because the push service said they were gone. */
   removed: number;
-  skipped?: "disabled" | "no-subscriptions";
+  skipped?: "disabled" | "no-subscriptions" | "error";
 };
 
 type StoredSubscription = {
@@ -96,10 +96,25 @@ export async function sendPushToUser(
     };
   }
 
-  const { data } = await admin
+  const { data, error } = await admin
     .from("push_subscriptions")
     .select("id, endpoint, p256dh, auth")
     .eq("user_id", userId);
+
+  if (error) {
+    // Log only the message/code: the rows carry device keys, never log them.
+    console.error("[push] could not read push_subscriptions", {
+      message: error.message,
+      code: error.code,
+    });
+    return {
+      subscriptions: 0,
+      sent: 0,
+      failed: 0,
+      removed: 0,
+      skipped: "error",
+    };
+  }
 
   const subscriptions = (data ?? []) as StoredSubscription[];
   if (subscriptions.length === 0) {
@@ -143,11 +158,21 @@ export async function sendPushToUser(
 
   let removed = 0;
   for (const id of new Set(staleIds)) {
-    const { error } = await admin
+    const { data, error } = await admin
       .from("push_subscriptions")
       .delete()
-      .eq("id", id);
-    if (!error) removed += 1;
+      .eq("id", id)
+      .select("id");
+    if (error) {
+      // Pruning is best-effort: the send already happened, so log and move on
+      // instead of failing the whole batch.
+      console.error("[push] could not prune a stale subscription", {
+        message: error.message,
+        code: error.code,
+      });
+      continue;
+    }
+    if (data && data.length > 0) removed += 1;
   }
 
   return { subscriptions: subscriptions.length, sent, failed, removed };

@@ -66,18 +66,36 @@ type DoseRow = {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/** Logs a Supabase error's message and code only — never row data or keys. */
+function logSupabaseError(
+  context: string,
+  error: { message: string; code?: string }
+): void {
+  console.error(`[doses] ${context}`, {
+    message: error.message,
+    code: error.code,
+  });
+}
+
 /** The patient id when it is owned by `userId`, otherwise null. */
 async function ownedPatientId(
   supabase: SupabaseClient,
   patientId: string,
   userId: string
 ): Promise<string | null> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("patients")
     .select("id")
     .eq("id", patientId)
     .eq("owner_user_id", userId)
     .maybeSingle();
+
+  if (error) {
+    // Fail closed rather than misreporting a DB failure as "not owned".
+    logSupabaseError("could not verify patient ownership", error);
+    throw new Error("Could not verify that this patient belongs to you.");
+  }
+
   return (data?.id as string | undefined) ?? null;
 }
 
@@ -93,28 +111,32 @@ async function decrementInventory(
 ): Promise<number | null> {
   if (count <= 0) return null;
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("inventory")
     .select("quantity_left")
     .eq("medicine_id", medicineId)
     .maybeSingle();
+  if (error) {
+    logSupabaseError("could not read inventory", error);
+    return null;
+  }
   if (!data) return null;
 
   const current = (data.quantity_left as number | null) ?? 0;
   const next = Math.max(0, current - count);
-  const { error } = await supabase
+  const { data: updated, error: updateError } = await supabase
     .from("inventory")
     .update({ quantity_left: next })
-    .eq("medicine_id", medicineId);
+    .eq("medicine_id", medicineId)
+    .select("quantity_left");
 
-  if (error) {
-    console.error("[doses] inventory update failed", {
-      message: error.message,
-      medicineId,
-    });
+  if (updateError) {
+    logSupabaseError("could not update inventory", updateError);
     return null;
   }
-  return next;
+
+  const saved = updated?.[0]?.quantity_left;
+  return typeof saved === "number" ? saved : next;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,15 +157,20 @@ export async function findNextPendingDose(
   userId: string,
   admin: SupabaseClient = createAdminClient()
 ): Promise<NextPendingDose | null> {
-  const { data: patients } = await admin
+  const { data: patients, error: patientsError } = await admin
     .from("patients")
     .select("id")
     .eq("owner_user_id", userId);
 
+  if (patientsError) {
+    logSupabaseError("could not list patient profiles", patientsError);
+    throw new Error("Could not look up your doses.");
+  }
+
   const patientIds = (patients ?? []).map((row) => row.id as string);
   if (patientIds.length === 0) return null;
 
-  const { data: dose } = await admin
+  const { data: dose, error: doseError } = await admin
     .from("dose_logs")
     .select("id, due_at, schedule_id")
     .in("patient_id", patientIds)
@@ -152,22 +179,33 @@ export async function findNextPendingDose(
     .limit(1)
     .maybeSingle();
 
+  if (doseError) {
+    logSupabaseError("could not read the next pending dose", doseError);
+    throw new Error("Could not look up your next dose.");
+  }
   if (!dose) return null;
 
+  // The medicine name is only enrichment for the notification body: a failed
+  // lookup degrades to a generic message instead of aborting.
   let medicineName: string | null = null;
 
-  const { data: schedule } = await admin
+  const { data: schedule, error: scheduleError } = await admin
     .from("schedules")
     .select("medicine_id")
     .eq("id", dose.schedule_id)
     .maybeSingle();
 
-  if (schedule?.medicine_id) {
-    const { data: medicine } = await admin
+  if (scheduleError) {
+    logSupabaseError("could not read the dose's schedule", scheduleError);
+  } else if (schedule?.medicine_id) {
+    const { data: medicine, error: medicineError } = await admin
       .from("medicines")
       .select("name")
       .eq("id", schedule.medicine_id)
       .maybeSingle();
+    if (medicineError) {
+      logSupabaseError("could not read the medicine name", medicineError);
+    }
     medicineName = (medicine?.name as string | undefined) ?? null;
   }
 
@@ -196,7 +234,11 @@ export async function applyDoseAction(
     .eq("id", doseId)
     .maybeSingle();
 
-  if (error || !data) {
+  if (error) {
+    logSupabaseError("could not read dose", error);
+    return { ok: false, error: "Could not look up that dose.", httpStatus: 500 };
+  }
+  if (!data) {
     return { ok: false, error: "We could not find that dose.", httpStatus: 404 };
   }
   const dose = data as unknown as DoseRow;
@@ -215,21 +257,31 @@ export async function applyDoseAction(
   // --- Snooze: move the dose 10 minutes out and re-enter the alert loop. -----
   if (action === "snooze") {
     const dueAt = snoozeDueAt(dose.due_at, now);
-    const { error: updateError } = await admin
+    const { data: updated, error: updateError } = await admin
       .from("dose_logs")
       .update({ status: "snoozed", due_at: dueAt, acted_at: nowIso })
-      .eq("id", doseId);
+      .eq("id", doseId)
+      .select("id");
 
     if (updateError) {
       // The moved `due_at` collided with another dose for the same schedule
       // (unique on `(schedule_id, due_at)`). Keep the snooze status without
       // moving the time rather than failing the tap.
       if (updateError.code === "23505") {
-        const { error: fallbackError } = await admin
+        const { data: fallback, error: fallbackError } = await admin
           .from("dose_logs")
           .update({ status: "snoozed", acted_at: nowIso })
-          .eq("id", doseId);
+          .eq("id", doseId)
+          .select("id");
         if (fallbackError) {
+          logSupabaseError("could not snooze dose (fallback)", fallbackError);
+          return {
+            ok: false,
+            error: "Could not update the dose.",
+            httpStatus: 500,
+          };
+        }
+        if (!fallback?.length) {
           return {
             ok: false,
             error: "Could not update the dose.",
@@ -244,6 +296,10 @@ export async function applyDoseAction(
           inventoryLeft: null,
         };
       }
+      logSupabaseError("could not snooze dose", updateError);
+      return { ok: false, error: "Could not update the dose.", httpStatus: 500 };
+    }
+    if (!updated?.length) {
       return { ok: false, error: "Could not update the dose.", httpStatus: 500 };
     }
 
@@ -252,12 +308,17 @@ export async function applyDoseAction(
 
   // --- Taken / skipped: final for today (until the next scheduled dose). -----
   const status = STATUS_BY_ACTION[action];
-  const { error: updateError } = await admin
+  const { data: updated, error: updateError } = await admin
     .from("dose_logs")
     .update({ status, acted_at: nowIso })
-    .eq("id", doseId);
+    .eq("id", doseId)
+    .select("id");
 
   if (updateError) {
+    logSupabaseError("could not update dose", updateError);
+    return { ok: false, error: "Could not update the dose.", httpStatus: 500 };
+  }
+  if (!updated?.length) {
     return { ok: false, error: "Could not update the dose.", httpStatus: 500 };
   }
 
@@ -265,12 +326,15 @@ export async function applyDoseAction(
   // realtime echo) can never remove a second tablet.
   let inventoryLeft: number | null = null;
   if (action === "taken" && dose.status !== "taken") {
-    const { data: schedule } = await admin
+    const { data: schedule, error: scheduleError } = await admin
       .from("schedules")
       .select("medicine_id")
       .eq("id", dose.schedule_id)
       .maybeSingle();
-    if (schedule?.medicine_id) {
+    if (scheduleError) {
+      // Stock is best-effort; a failed lookup must not undo the "taken" action.
+      logSupabaseError("could not read the dose's schedule", scheduleError);
+    } else if (schedule?.medicine_id) {
       inventoryLeft = await decrementInventory(
         admin,
         schedule.medicine_id as string,
@@ -300,7 +364,11 @@ export async function logAdHocDose(
     .eq("id", scheduleId)
     .maybeSingle();
 
-  if (error || !schedule) {
+  if (error) {
+    logSupabaseError("could not read the schedule", error);
+    return { ok: false, error: "Could not look up that medicine.", httpStatus: 500 };
+  }
+  if (!schedule) {
     return { ok: false, error: "We could not find that medicine.", httpStatus: 404 };
   }
   if (schedule.days_pattern !== "as_needed") {
@@ -339,6 +407,9 @@ export async function logAdHocDose(
         error: "Just logged. Try again in a moment.",
         httpStatus: 409,
       };
+    }
+    if (insertError) {
+      logSupabaseError("could not log the dose", insertError);
     }
     return { ok: false, error: "Could not log that dose.", httpStatus: 500 };
   }
