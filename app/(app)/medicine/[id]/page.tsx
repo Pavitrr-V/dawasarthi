@@ -8,7 +8,12 @@ import { buildRiskContext, MEDICINE_RISK_COLUMNS, type MedicineRiskRow } from "@
 import { Card, PageHeader } from "@/components/ui";
 import { TrustCard } from "@/components/medicine/trust-card";
 import { MedicineInfoPanel } from "@/components/medicine/medicine-info-panel";
+import {
+  ScheduleList,
+  type ScheduleCardRow,
+} from "@/components/medicine/schedule-list";
 import { MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
+import { istToday } from "@/lib/schedule";
 
 export const instant = false;
 
@@ -94,10 +99,20 @@ export default async function MedicinePage({
     admin = null;
   }
 
-  const [context, patient] = await Promise.all([
+  const [context, patient, schedulesResult] = await Promise.all([
     buildRiskContext({ supabase, medicine, admin }),
     getOwnedPatient(medicine.patient_id),
+    supabase
+      .from("schedules")
+      .select(
+        "id, times, days_pattern, weekdays, meal_link, start_date, duration_days"
+      )
+      .eq("medicine_id", medicine.id)
+      .eq("active", true)
+      .order("created_at", { ascending: false }),
   ]);
+
+  const schedules = (schedulesResult.data ?? []) as ScheduleCardRow[];
 
   const result = evaluateRisk(context.input);
   const expiresInDays = daysToExpiry(medicine.expiry_date, context.input.today);
@@ -304,11 +319,14 @@ export default async function MedicinePage({
         onlineDemo={context.onlineCheck?.demo === true}
         expiresInDays={expiresInDays}
         reminderTimes={mealTimes}
+        todayIst={istToday()}
         hasStripImage={Boolean(medicine.strip_image_path)}
         hasBoxImage={Boolean(medicine.box_image_path)}
         infoPanel={infoPanel}
         safetyPanel={safetyPanel}
       />
+
+      <ScheduleList schedules={schedules} />
     </div>
   );
 }

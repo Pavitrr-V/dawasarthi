@@ -4,6 +4,17 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
+import {
+  MAX_DURATION_DAYS,
+  MAX_TIMES,
+  generateDoses,
+  normalizeTimes,
+  normalizeWeekdays,
+  parseIsoDate,
+  resolveMealTime,
+  type DaysPattern,
+  type MealLink,
+} from "@/lib/schedule";
 
 export type ActionResult =
   | { ok: true; message: string }
@@ -133,45 +144,164 @@ export async function reportSuspiciousMedicine(
 // Set reminder
 // ---------------------------------------------------------------------------
 
-const timesSchema = z
-  .array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/))
-  .min(1)
-  .max(6);
+const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
+export type ReminderInput = {
+  medicineId: string;
+  /** Explicit clock times ("HH:MM"); may be empty when a meal link is set. */
+  times: string[];
+  daysPattern: DaysPattern;
+  /** 0 = Sunday … 6 = Saturday; only used for the "weekdays" pattern. */
+  weekdays: number[];
+  mealLink: MealLink | null;
+  /** "YYYY-MM-DD" in the patient's timezone. */
+  startDate: string;
+  /** null = ongoing. */
+  durationDays: number | null;
+};
+
+const reminderSchema = z.object({
+  medicineId: medicineIdSchema,
+  times: z.array(hhmmSchema).max(MAX_TIMES),
+  daysPattern: z.enum(["daily", "alternate", "weekdays", "as_needed"]),
+  weekdays: z.array(z.number().int().min(0).max(6)).max(7),
+  mealLink: z
+    .enum([
+      "before_breakfast",
+      "after_breakfast",
+      "before_lunch",
+      "after_lunch",
+      "before_dinner",
+      "after_dinner",
+    ])
+    .nullable(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  durationDays: z.number().int().min(1).max(MAX_DURATION_DAYS).nullable(),
+});
+
+/**
+ * Creates a schedule and materialises the first week of `dose_logs`.
+ *
+ * The schedule id is generated up front so the dose rows can reference it
+ * without a `.select()` after insert (the schedules SELECT policy goes through
+ * a helper function and cannot be relied on to echo the row back). Doses are
+ * written with an upsert that ignores duplicates on `(schedule_id, due_at)`,
+ * backed by the `dose_logs_schedule_due_uniq` unique index.
+ */
 export async function createReminder(
-  medicineId: string,
-  times: string[]
+  input: ReminderInput
 ): Promise<ActionResult> {
   const user = await getCurrentUser();
   if (!user || user.role !== "patient") {
     return { ok: false, error: "Please sign in again." };
   }
 
-  const idParsed = medicineIdSchema.safeParse(medicineId);
-  const timesParsed = timesSchema.safeParse(times);
-  if (!idParsed.success || !timesParsed.success) {
-    return { ok: false, error: "Pick at least one reminder time." };
+  const parsed = reminderSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Please check the reminder details." };
+  }
+  const data = parsed.data;
+
+  // `parseIsoDate` rejects impossible dates (e.g. 2026-02-30) that the regex
+  // above would accept.
+  if (!parseIsoDate(data.startDate)) {
+    return { ok: false, error: "Pick a valid start date." };
   }
 
-  const owned = await ownedMedicinePatientId(idParsed.data);
+  const owned = await ownedMedicinePatientId(data.medicineId);
   if ("error" in owned) return { ok: false, error: owned.error };
 
   const supabase = await createClient();
-  const { error } = await supabase.from("schedules").insert({
-    medicine_id: idParsed.data,
+
+  // Resolve the optional meal link against this patient's own meal times; the
+  // resolved clock time is merged into `times` so the schedule is
+  // self-contained for dose generation.
+  const mealLink = data.mealLink;
+  let resolvedTime: string | null = null;
+  if (mealLink) {
+    const { data: patientRow } = await supabase
+      .from("patients")
+      .select("breakfast_time, lunch_time, dinner_time")
+      .eq("id", owned.patientId)
+      .maybeSingle();
+    resolvedTime = resolveMealTime(mealLink, {
+      breakfast: patientRow?.breakfast_time ?? null,
+      lunch: patientRow?.lunch_time ?? null,
+      dinner: patientRow?.dinner_time ?? null,
+    });
+  }
+
+  const times = normalizeTimes([
+    ...data.times,
+    ...(resolvedTime ? [resolvedTime] : []),
+  ]);
+  if (data.daysPattern !== "as_needed" && times.length === 0) {
+    return { ok: false, error: "Pick at least one reminder time." };
+  }
+  if (data.daysPattern === "weekdays" && data.weekdays.length === 0) {
+    return { ok: false, error: "Pick at least one day of the week." };
+  }
+
+  const weekdays =
+    data.daysPattern === "weekdays" ? normalizeWeekdays(data.weekdays) : [];
+
+  const scheduleId = crypto.randomUUID();
+  const { error: scheduleError } = await supabase.from("schedules").insert({
+    id: scheduleId,
+    medicine_id: data.medicineId,
     patient_id: owned.patientId,
     // Postgres `time[]` accepts "HH:MM:SS" strings.
-    times: timesParsed.data.map((time) => `${time}:00`),
-    days_pattern: "daily",
+    times: times.map((time) => `${time}:00`),
+    days_pattern: data.daysPattern,
+    weekdays,
+    meal_link: mealLink,
+    start_date: data.startDate,
+    duration_days: data.durationDays,
     active: true,
   });
 
-  if (error) {
+  if (scheduleError) {
     return { ok: false, error: "Could not set the reminder. Please try again." };
   }
 
-  revalidatePath(`/medicine/${idParsed.data}`);
-  return { ok: true, message: "Reminder set. We will nudge you at these times." };
+  const doses = generateDoses(
+    {
+      id: scheduleId,
+      patient_id: owned.patientId,
+      times,
+      days_pattern: data.daysPattern,
+      weekdays,
+      start_date: data.startDate,
+      duration_days: data.durationDays,
+    },
+    7
+  );
+
+  if (doses.length > 0) {
+    const { error: doseError } = await supabase
+      .from("dose_logs")
+      .upsert(doses, {
+        onConflict: "schedule_id,due_at",
+        ignoreDuplicates: true,
+      });
+    if (doseError) {
+      // Keep the two writes consistent: drop the orphaned schedule.
+      await supabase.from("schedules").delete().eq("id", scheduleId);
+      return { ok: false, error: "Could not set the reminder. Please try again." };
+    }
+  }
+
+  revalidatePath(`/medicine/${data.medicineId}`);
+  revalidatePath("/home");
+  revalidatePath("/history");
+
+  return {
+    ok: true,
+    message:
+      doses.length > 0
+        ? "Reminder set. We will nudge you and track each dose."
+        : "Reminder set. We will nudge you when needed.",
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,8 @@ export type TrustCardProps = {
   expiresInDays: number | null;
   /** Times offered by the "Set reminder" sheet, from the patient profile. */
   reminderTimes: { label: string; time: string }[];
+  /** Today in Asia/Kolkata ("YYYY-MM-DD") for the reminder start date. */
+  todayIst: string;
   hasStripImage: boolean;
   hasBoxImage: boolean;
   /** Server-rendered tab panels (kept on the server, switched on the client). */
@@ -187,6 +189,7 @@ export function TrustCard({
   onlineDemo,
   expiresInDays,
   reminderTimes,
+  todayIst,
   hasStripImage,
   hasBoxImage,
   infoPanel,
@@ -432,6 +435,7 @@ export function TrustCard({
         medicineId={medicineId}
         userId={userId}
         reminderTimes={reminderTimes}
+        todayIst={todayIst}
         hasStripImage={hasStripImage}
         hasBoxImage={hasBoxImage}
         onChanged={scheduledRecompute}
