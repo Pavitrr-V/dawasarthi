@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getAgentRun } from "@/lib/tinyfish";
+import { getAgentRun, startAgentRun } from "@/lib/tinyfish";
 import { parseAgentAlerts, upsertNsqAlerts } from "@/lib/alerts";
 
 /**
@@ -163,6 +163,32 @@ export type AlertSyncBatchResult = {
   failed: number;
   running: number;
 };
+
+/**
+ * Starts one alert_sync agent run and records a running `tinyfish_jobs` row.
+ * Throws the TinyFish errors (BudgetExceeded, AuthError, ...) unchanged so the
+ * caller can map them; throws a plain Error when the job row cannot be written.
+ */
+export async function startAlertSyncJob(): Promise<{ jobId: string; runId: string }> {
+  const run = await startAgentRun({ url: alertSourceUrl(), goal: ALERT_GOAL });
+
+  const admin = createAdminClient();
+  const jobId = crypto.randomUUID();
+
+  const { error } = await admin.from("tinyfish_jobs").insert({
+    id: jobId,
+    kind: "alert_sync",
+    run_id: run.runId,
+    status: "running",
+    // Alert sync is site-wide, not tied to a patient's medicine.
+    medicine_id: null,
+    user_id: null,
+  });
+
+  if (error) throw new Error("Could not record the alert-sync job.");
+
+  return { jobId, runId: run.runId };
+}
 
 /**
  * Processes up to `limit` running alert_sync jobs. Called by the finish cron.
