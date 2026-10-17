@@ -1,4 +1,4 @@
-# 💊 DawaSarthi
+#  DawaSarthi
 
 **Scan a medicine. Know if it's safe. Never miss a dose.**
 
@@ -70,7 +70,7 @@ flowchart LR
     F --> G[Online Verification]
     H[(nsq_alerts)] --> E
     G --> E
-    E --> I[🟢🟡🔴 Trust Card]
+    E --> I[Trust Card]
     D --> J[Schedules + Dose Logs]
     J --> K[Cron Tick Worker]
     K --> L[Web Push]
@@ -88,7 +88,7 @@ flowchart LR
 
 DawaSarthi uses TinyFish in **four places**:
 
-### TF-A: Official Batch Safety Alert Check ⭐
+### TF-A: Official Batch Safety Alert Check 
 
 *The headline feature.* Label-reading alone can't tell you that a *specific batch* was flagged by regulators.
 
@@ -96,15 +96,15 @@ DawaSarthi uses TinyFish in **four places**:
 - The agent extracts `product_name`, `batch_no`, `manufacturer`, `alert_type`, `alert_date`, and the alert document link.
 - Results are validated with **zod** and upserted into `nsq_alerts` (with `source_url` + `fetched_at`).
 - On every scan, `matchAlerts()` does a **DB-only** trigram lookup (no TinyFish call per scan):
-  - name **and** batch match → 🔴 **RED**: "Official safety alert for this batch" (with source link)
-  - name only → ℹ️ info: "Other batches had an alert; yours is not listed" (no colour change)
+  - name **and** batch match →  **RED**: "Official safety alert for this batch" (with source link)
+  - name only → info: "Other batches had an alert; yours is not listed" (no colour change)
 - Fallback: `data/nsq_demo.csv` seed if the live fetch fails.
 
 ### TF-B: Online Verification
 
 - After saving a medicine, `POST /api/verify/start` fires **in the background** and returns immediately.
 - A TinyFish Agent opens a pharmacy listing (from `VERIFY_SOURCE_URLS`), finds the best match, and extracts `listed_name`, `listed_mrp`, `listed_manufacturer`, `listed_pack_size`, plus a confidence score.
-- Scanned MRP differing by **>15%**, or a manufacturer mismatch (only when confidence ≥ 0.7) → 🟡 **AMBER**.
+- Scanned MRP differing by **>15%**, or a manufacturer mismatch (only when confidence ≥ 0.7) →  **AMBER**.
 - Not found online → soft AMBER warning. Pending/error → info only.
 - The trust card **updates live** via Supabase Realtime (with `/api/verify/status` polling as fallback).
 
