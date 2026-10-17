@@ -10,7 +10,7 @@ DawaSarthi is a mobile-first PWA that reads a photo of a medicine strip, box, or
 
 ## Table of Contents
 
-- [Why DawaSarthi](#why-medscan)
+- [Why DawaSarthi](#why-DawaSarthi)
 - [Features](#features)
 - [How It Works](#how-it-works)
 - [TinyFish Integration](#tinyfish-integration)
