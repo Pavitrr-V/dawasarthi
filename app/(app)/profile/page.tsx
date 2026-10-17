@@ -3,6 +3,7 @@ import { requireRole } from "@/lib/auth";
 import { listPatientProfiles } from "@/lib/patients";
 import { Button, Card, EmptyState, PageHeader } from "@/components/ui";
 import { DeleteDataButton } from "@/components/delete-data-button";
+import { NotificationSettings } from "@/components/push/notification-settings";
 
 export const instant = false;
 
@@ -20,6 +21,8 @@ export default async function PatientProfilePage() {
         <Row label="Phone" value={user.phone ?? "Not set"} />
         <Row label="Language" value={user.language.toUpperCase()} />
       </Card>
+
+      <NotificationSettings />
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">

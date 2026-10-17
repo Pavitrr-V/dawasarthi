@@ -11,6 +11,6 @@ export const config = {
      * Run on everything except static assets and metadata files.
      * Auth callback routes (/auth/*) are handled inside updateSession.
      */
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|sw.js|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

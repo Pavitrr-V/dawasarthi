@@ -1,4 +1,5 @@
 import { Button, Card, PageHeader } from "@/components/ui";
+import { NotificationSettings } from "@/components/push/notification-settings";
 import type { Profile } from "@/lib/types";
 
 const ROLE_LABELS: Record<Profile["role"], string> = {
@@ -17,6 +18,8 @@ export function ProfileView({ profile }: { profile: Profile }) {
         <Row label="Phone" value={profile.phone ?? "Not set"} />
         <Row label="Language" value={profile.language.toUpperCase()} />
       </Card>
+
+      <NotificationSettings />
 
       <form action="/auth/signout" method="post">
         <Button type="submit" variant="secondary" className="w-full">

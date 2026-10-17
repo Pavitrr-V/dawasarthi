@@ -368,3 +368,83 @@ export function patternLabel(schedule: PatternInfo): string {
       return "Only when needed";
   }
 }
+
+// ---------------------------------------------------------------------------
+// Day parts (home timeline) and snooze
+// ---------------------------------------------------------------------------
+
+/** How long "Snooze" pushes a dose out (matches the notification button). */
+export const SNOOZE_MINUTES = 10;
+
+export const DAY_PARTS = ["Morning", "Afternoon", "Evening", "Night"] as const;
+export type DayPart = (typeof DAY_PARTS)[number];
+
+/** The ISO instant at the start of `date` (00:00 Asia/Kolkata). */
+export function istStartOfDay(date: string): string {
+  return istInstant(date, "00:00");
+}
+
+/** Asia/Kolkata hour (0–23) for a `timestamptz` ISO string. */
+export function istHour(iso: string): number {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return 0;
+  return new Date(ms + IST_OFFSET_MINUTES * 60_000).getUTCHours();
+}
+
+/**
+ * Which part of the day a dose belongs to, in Asia/Kolkata:
+ * Morning 04:00–11:59 · Afternoon 12:00–16:59 · Evening 17:00–20:59 ·
+ * Night 21:00–03:59.
+ */
+export function dayPartOf(iso: string): DayPart {
+  const hour = istHour(iso);
+  if (hour >= 4 && hour < 12) return "Morning";
+  if (hour >= 12 && hour < 17) return "Afternoon";
+  if (hour >= 17 && hour < 21) return "Evening";
+  return "Night";
+}
+
+/** "8:05 am" / "9:30 pm" clock label in Asia/Kolkata. */
+export function istClockLabel(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return "";
+  const shifted = new Date(ms + IST_OFFSET_MINUTES * 60_000);
+  const hour24 = shifted.getUTCHours();
+  const minutes = shifted.getUTCMinutes();
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${pad2(minutes)} ${hour24 < 12 ? "am" : "pm"}`;
+}
+
+export type DayPartGroup<T> = { part: DayPart; items: T[] };
+
+/**
+ * Buckets items (anything with a `due_at`) into Morning → Night order, dropping
+ * empty buckets and preserving the input order inside each bucket.
+ */
+export function groupByDayPart<T extends { due_at: string }>(
+  items: T[]
+): DayPartGroup<T>[] {
+  const buckets: Record<DayPart, T[]> = {
+    Morning: [],
+    Afternoon: [],
+    Evening: [],
+    Night: [],
+  };
+  for (const item of items) buckets[dayPartOf(item.due_at)].push(item);
+  return DAY_PARTS.filter((part) => buckets[part].length > 0).map((part) => ({
+    part,
+    items: buckets[part],
+  }));
+}
+
+/**
+ * The new `due_at` for a snoozed dose: ten minutes after the later of the
+ * original time and now, so an already-overdue dose still fires soon.
+ */
+export function snoozeDueAt(dueAt: string, now: Date = new Date()): string {
+  const dueMs = Date.parse(dueAt);
+  const base = Number.isNaN(dueMs)
+    ? now.getTime()
+    : Math.max(dueMs, now.getTime());
+  return new Date(base + SNOOZE_MINUTES * 60_000).toISOString();
+}

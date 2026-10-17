@@ -1,3 +1,5 @@
+import type { DaysPattern } from "@/lib/schedule";
+
 export type Role = "patient" | "caregiver";
 
 export type Profile = {
@@ -60,4 +62,32 @@ export type MedicineInfoPayload = MedicineInfo & {
   cached: boolean;
   /** The model that answered the fallback chain (equals `model`). */
   model_used: string;
+};
+
+/** The statuses a `dose_logs.status` row can hold (matches the DB check). */
+export type DoseStatus =
+  | "pending"
+  | "taken"
+  | "skipped"
+  | "snoozed"
+  | "missed";
+
+/** One row in the home "today" timeline (already joined to its medicine). */
+export type TimelineDose = {
+  id: string;
+  due_at: string;
+  status: DoseStatus;
+  acted_at: string | null;
+  medicine_name: string;
+  /** "Day 3 of 5" while a course runs, or null. */
+  course: string | null;
+  schedule_id: string;
+  days_pattern: DaysPattern;
+};
+
+/** An as-needed medicine shown on the home screen ("Took one now"). */
+export type AsNeededMedicine = {
+  schedule_id: string;
+  medicine_id: string;
+  name: string;
 };

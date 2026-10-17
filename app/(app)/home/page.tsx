@@ -1,23 +1,50 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { getSelectedPatient } from "@/lib/patients";
-import { Card, PageHeader } from "@/components/ui";
+import { getHomeData } from "@/lib/dose-timeline";
+import { Button, Card, EmptyState, PageHeader } from "@/components/ui";
 import { CabinetIcon, HistoryIcon, ScanIcon } from "@/components/icons";
+import { TodayTimeline } from "@/components/home/today-timeline";
+import { AsNeededList } from "@/components/home/as-needed-list";
+
+export const instant = false;
 
 export default async function HomePage() {
   await requireRole("patient");
   const selected = await getSelectedPatient();
 
+  if (!selected) {
+    return (
+      <div className="space-y-4">
+        <PageHeader
+          title="Home"
+          subtitle="Your medicines, trust checks, and reminders in one place."
+        />
+        <EmptyState
+          title="Add a patient profile"
+          description="Create a profile to start tracking medicines and doses."
+          action={
+            <Link href="/patients/new" className="mt-2 block">
+              <Button>Add a profile</Button>
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
+
+  const { doses, asNeeded } = await getHomeData(selected.id);
+
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Home"
-        subtitle={
-          selected
-            ? `Medicines, trust checks, and reminders for ${selected.name}.`
-            : "Your medicines, trust checks, and reminders in one place."
-        }
+        title="Today"
+        subtitle={`Reminders and doses for ${selected.name}.`}
       />
+
+      <TodayTimeline patientId={selected.id} doses={doses} />
+
+      <AsNeededList items={asNeeded} />
 
       <div className="grid grid-cols-1 gap-3">
         <QuickAction
