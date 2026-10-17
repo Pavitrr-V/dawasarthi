@@ -1,8 +1,8 @@
-# 💊 MedScan
+# 💊 DawaSarthi
 
 **Scan a medicine. Know if it's safe. Never miss a dose.**
 
-MedScan is a mobile-first PWA that reads a photo of a medicine strip, box, or prescription, gives it a **Green / Amber / Red trust card**, sets up medicine reminders, and **alerts a caregiver** (push + SMS + WhatsApp) if a dose is missed. Web intelligence is powered by **[TinyFish](https://docs.tinyfish.ai)**: official batch-alert checks, online listing verification, source-backed medicine info, and refill price comparison.
+DawaSarthi is a mobile-first PWA that reads a photo of a medicine strip, box, or prescription, gives it a **Green / Amber / Red trust card**, sets up medicine reminders, and **alerts a caregiver** (push + SMS + WhatsApp) if a dose is missed. Web intelligence is powered by **[TinyFish](https://docs.tinyfish.ai)**: official batch-alert checks, online listing verification, source-backed medicine info, and refill price comparison.
 
 > ⚠️ **Risk check only; not medical advice. Consult a doctor or pharmacist.**
 
@@ -10,7 +10,7 @@ MedScan is a mobile-first PWA that reads a photo of a medicine strip, box, or pr
 
 ## Table of Contents
 
-- [Why MedScan](#why-medscan)
+- [Why DawaSarthi](#why-medscan)
 - [Features](#features)
 - [How It Works](#how-it-works)
 - [TinyFish Integration](#tinyfish-integration)
@@ -28,9 +28,9 @@ MedScan is a mobile-first PWA that reads a photo of a medicine strip, box, or pr
 
 ---
 
-## Why MedScan
+## Why DawaSarthi
 
-Counterfeit and sub-standard medicines are a real problem in India, and missed doses are a quiet one, especially for elderly patients managed by family members elsewhere. MedScan tackles both in one app:
+Counterfeit and sub-standard medicines are a real problem in India, and missed doses are a quiet one, especially for elderly patients managed by family members elsewhere. DawaSarthi tackles both in one app:
 
 1. **Is this medicine trustworthy?** Read the label, cross-check it, and compare it against official alerts.
 2. **Is the patient taking it on time?** Remind them, and loop in a caregiver when they don't.
@@ -86,7 +86,7 @@ flowchart LR
 
 [TinyFish](https://docs.tinyfish.ai) is a web automation platform. You describe a goal in natural language, and its **Agent API** performs browser actions on real websites and returns structured data. It also provides a **Search API** (ranked results) and a **Fetch API** (clean page content).
 
-MedScan uses TinyFish in **four places**:
+DawaSarthi uses TinyFish in **four places**:
 
 ### TF-A: Official Batch Safety Alert Check ⭐
 
@@ -127,7 +127,7 @@ Instead of letting the LLM answer from memory:
 
 ### Async Job Architecture
 
-Agent runs can take 3–60 seconds, so MedScan **never waits inside a user request**:
+Agent runs can take 3–60 seconds, so DawaSarthi **never waits inside a user request**:
 
 ```
 /api/verify/start ──► startAgentRun (/run-async) ──► tinyfish_jobs (queued, run_id)
@@ -200,7 +200,7 @@ Messages are written in simple language, in **English and Hindi**.
 ## Project Structure
 
 ```
-medscan/
+DawaSarthi/
 ├── app/
 │   ├── (app)/                  # protected routes: home, scan, cabinet, history, profile, caregiver
 │   ├── login/ · onboarding/ · join/
@@ -244,8 +244,8 @@ medscan/
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/<your-org>/medscan.git
-cd medscan
+git clone https://github.com/<your-org>/DawaSarthi.git
+cd DawaSarthi
 npm install
 ```
 
@@ -350,7 +350,7 @@ Schedule it with Supabase `pg_cron` + `pg_net`:
 
 ```sql
 select cron.schedule(
-  'medscan-tick', '* * * * *',
+  'DawaSarthi-tick', '* * * * *',
   $$ select net.http_post(
        url := 'https://<your-domain>/api/cron/tick',
        headers := jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>')
@@ -392,11 +392,11 @@ If TinyFish is unavailable, nothing crashes. The trust card simply shows **"Onli
 
 ## Known Limitations
 
-- Source sites can change structure, block access, or show stale data; MedScan treats such signals as **AMBER at most**.
+- Source sites can change structure, block access, or show stale data; DawaSarthi treats such signals as **AMBER at most**.
 - OCR on handwritten prescriptions is imperfect, so low-confidence rows must be manually verified.
 - Drug info and interaction data are informational and must be verified by a professional.
 - Twilio trial accounts only send to verified numbers.
-- **Scraping etiquette:** read-only, public pages only, cached and low-frequency. Review each site's Terms of Service and robots rules before use. MedScan never automates login or purchase.
+- **Scraping etiquette:** read-only, public pages only, cached and low-frequency. Review each site's Terms of Service and robots rules before use. DawaSarthi never automates login or purchase.
 
 ---
 
@@ -423,7 +423,7 @@ If TinyFish is unavailable, nothing crashes. The trust card simply shows **"Onli
 
 ## Disclaimer
 
-MedScan is a **risk-check tool, not a medical device**. Its output is not medical advice and does not replace a doctor or pharmacist. Always verify medicines and dosing with a qualified professional.
+DawaSarthi's output is not medical advice and does not replace a doctor or pharmacist. Always verify medicines and dosing with a qualified professional.
 
 ---
 
