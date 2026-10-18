@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { ingredientKey, normalizeIngredient } from "@/lib/utils/normalize";
 import { buildAllergyMatcher } from "@/lib/data/allergy-synonyms";
 import type {
@@ -111,7 +111,7 @@ export async function interactionCheck(
   const active = medicines.filter(isActiveMed);
   if (active.length < 2) return warnings;
 
-  const supabase = createSupabaseServerClient();
+  const supabase = createClient();
 
   for (let i = 0; i < active.length; i++) {
     for (let j = i + 1; j < active.length; j++) {
@@ -128,7 +128,7 @@ export async function interactionCheck(
         bKeys.add(normalizeIngredient(c.name))
       );
 
-      const { data: rows, error } = await supabase
+      const { data: rows, error } = await (await supabase)
         .from("interaction_pairs")
         .select(
           "id, drug_a, drug_b, severity, note, reference, source_url, fetched_at"

@@ -1,17 +1,17 @@
 "use server";
 
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { runAllSafetyChecks } from "@/lib/safety";
 import type { MedicineWithComp, PatientWithAllergies } from "@/lib/safety";
 import { connection } from "next/server";
 
 export async function runSafetyCheckForPatient(patientId: string) {
   await connection();
-  const supabase = createSupabaseServerClient();
-  const { data: user } = await supabase.auth.getUser();
+  const supabase = createClient();
+  const { data: user } = await (await supabase).auth.getUser();
   if (!user?.user) throw new Error("Unauthorized");
 
-  const { data: patient, error: pErr } = await supabase
+  const { data: patient, error: pErr } = await (await supabase)
     .from("patients")
     .select("id, allergies")
     .eq("id", patientId)
@@ -25,7 +25,7 @@ export async function runSafetyCheckForPatient(patientId: string) {
     throw new Error(pErr.message || "Failed to load patient");
   }
 
-  const { data: meds, error: mErr } = await supabase
+  const { data: meds, error: mErr } = await (await supabase)
     .from("medicines")
     .select("id, name, composition, active")
     .eq("patient_id", patientId);
