@@ -1,104 +1,68 @@
-import Link from "next/link";
-import { requireRole } from "@/lib/auth";
-import { getSelectedPatient } from "@/lib/patients";
-import { getHomeData } from "@/lib/dose-timeline";
-import { Button, Card, EmptyState, PageHeader } from "@/components/ui";
-import { CabinetIcon, HistoryIcon, ScanIcon } from "@/components/icons";
-import { TodayTimeline } from "@/components/home/today-timeline";
-import { AsNeededList } from "@/components/home/as-needed-list";
+"use client";
 
-export const instant = false;
+import { useEffect, useState } from "react";
+import { WarningBanner } from "@/components/safety/WarningBanner";
+import type { SafetyWarning } from "@/lib/types/safety";
+import { runSafetyCheckForPatient } from "@/lib/actions/safety-check";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
-export default async function HomePage() {
-  await requireRole("patient");
-  const selected = await getSelectedPatient();
+export default function HomePage() {
+  const supabase = createSupabaseBrowserClient();
+  const [warnings, setWarnings] = useState<SafetyWarning[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [patientId, setPatientId] = useState<string | null>(null);
 
-  if (!selected) {
-    return (
-      <div className="space-y-4">
-        <PageHeader
-          title="Home"
-          subtitle="Your medicines, trust checks, and reminders in one place."
-        />
-        <EmptyState
-          title="Add a patient profile"
-          description="Create a profile to start tracking medicines and doses."
-          action={
-            <Link href="/patients/new" className="mt-2 block">
-              <Button>Add a profile</Button>
-            </Link>
-          }
-        />
-      </div>
-    );
+  function getCookie(name: string): string | null {
+    if (typeof document === "undefined") return null;
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop()?.split(";").shift() || null;
+    return null;
   }
 
-  const { doses, asNeeded } = await getHomeData(selected.id);
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      setErr(null);
+      try {
+        const { data: user } = await supabase.auth.getUser();
+        if (!user?.user) throw new Error("Sign in required");
+        const cookiePid = getCookie("selected_patient_id");
+        let pid = cookiePid;
+        if (!pid) {
+          const { data: patients } = await supabase
+            .from("patients")
+            .select("id")
+            .limit(1);
+          pid = patients?.[0]?.id || null;
+        }
+        if (!pid) {
+          setWarnings([]);
+          return;
+        }
+        setPatientId(pid);
+        const res = await runSafetyCheckForPatient(pid);
+        setWarnings(res.warnings);
+      } catch (e: any) {
+        setErr(e.message || "Failed to load safety");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [supabase]);
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Today"
-        subtitle={`Reminders and doses for ${selected.name}.`}
+    <div className="py-3 flex flex-col gap-2">
+      <h1 className="text-lg font-semibold">Home</h1>
+      <WarningBanner
+        warnings={warnings}
+        onView={() => {
+          // navigate to trust card/safety tab
+        }}
       />
-
-      <TodayTimeline patientId={selected.id} doses={doses} />
-
-      <AsNeededList items={asNeeded} />
-
-      <div className="grid grid-cols-1 gap-3">
-        <QuickAction
-          href="/scan"
-          title="Scan a medicine"
-          description="Photo of a strip, box, or prescription"
-          Icon={ScanIcon}
-        />
-        <QuickAction
-          href="/cabinet"
-          title="My cabinet"
-          description="View your medicines and stock"
-          Icon={CabinetIcon}
-        />
-        <QuickAction
-          href="/history"
-          title="Dose history"
-          description="See taken, skipped, and missed doses"
-          Icon={HistoryIcon}
-        />
-      </div>
-
-      <Card className="bg-primary-50 text-[15px] text-primary-900">
-        Tip: Add your caregiver from Profile so they can be alerted if a dose is
-        missed.
-      </Card>
+      {err && <div className="text-xs text-red-600">{err}</div>}
     </div>
-  );
-}
-
-function QuickAction({
-  href,
-  title,
-  description,
-  Icon,
-}: {
-  href: string;
-  title: string;
-  description: string;
-  Icon: (props: { className?: string }) => React.ReactNode;
-}) {
-  return (
-    <Link href={href} className="block">
-      <Card className="flex items-center gap-4 transition-colors hover:border-primary-300 hover:bg-primary-50/40">
-        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary-100 text-primary-700">
-          <Icon />
-        </span>
-        <span className="flex-1">
-          <span className="block text-lg font-semibold text-slate-900">
-            {title}
-          </span>
-          <span className="block text-[15px] text-slate-500">{description}</span>
-        </span>
-      </Card>
-    </Link>
   );
 }
