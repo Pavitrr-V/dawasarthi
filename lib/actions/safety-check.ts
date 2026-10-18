@@ -27,7 +27,7 @@ export async function runSafetyCheckForPatient(patientId: string) {
 
   const { data: meds, error: mErr } = await (await supabase)
     .from("medicines")
-    .select("id, name, composition, active")
+    .select("id, name, composition")
     .eq("patient_id", patientId);
   if (mErr) {
     console.error(
