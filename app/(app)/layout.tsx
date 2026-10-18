@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { connection } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { getPatientContext } from "@/lib/patients";
 import { PatientProvider } from "@/lib/patient-context";
@@ -9,6 +10,8 @@ import { Disclaimer } from "@/components/disclaimer";
 export const instant = false;
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
+  await connection(); // request-time render: iske baad Date.now() / new Date() allowed
+
   const user = await requireUser();
   const { patients, selected } = await getPatientContext();
 
