@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { getSelectedPatient } from "@/lib/patients";
@@ -8,6 +9,7 @@ import { EMPTY_EXTRACTION } from "@/lib/review";
 export const instant = false;
 
 export default async function ManualEntryPage() {
+  await connection();
   await requireRole("patient");
   const patient = await getSelectedPatient();
 

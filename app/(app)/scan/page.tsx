@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { getSelectedPatient } from "@/lib/patients";
@@ -7,6 +8,7 @@ import { ScanView } from "@/components/scan/scan-view";
 export const instant = false;
 
 export default async function ScanPage() {
+  await connection();
   const user = await requireRole("patient");
   const patient = await getSelectedPatient();
 

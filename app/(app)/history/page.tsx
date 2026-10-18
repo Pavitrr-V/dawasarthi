@@ -1,7 +1,9 @@
+import { connection } from "next/server";
 import { requireRole } from "@/lib/auth";
 import { EmptyState, PageHeader } from "@/components/ui";
 
 export default async function HistoryPage() {
+  await connection();
   await requireRole("patient");
 
   return (

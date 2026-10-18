@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
@@ -6,6 +7,7 @@ import { PatientForm } from "@/components/patient-form";
 export const instant = false;
 
 export default async function NewPatientPage() {
+  await connection();
   await requireRole("patient");
 
   return (

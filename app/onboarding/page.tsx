@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { Disclaimer } from "@/components/disclaimer";
 import { OnboardingForm } from "./onboarding-form";
@@ -5,6 +6,7 @@ import { OnboardingForm } from "./onboarding-form";
 export const instant = false;
 
 export default async function OnboardingPage() {
+  await connection();
   const user = await requireUser();
 
   return (

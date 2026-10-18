@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { loadInvitePreview } from "@/lib/caregiver-server";
@@ -52,6 +53,7 @@ export default async function JoinPage({
 }: {
   searchParams: Promise<{ code?: string }>;
 }) {
+  await connection();
   const { code: rawCode } = await searchParams;
   const code = normalizeInviteCode(rawCode);
 

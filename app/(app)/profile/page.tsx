@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { getSelectedPatient, listPatientProfiles } from "@/lib/patients";
@@ -10,6 +11,7 @@ import { FamilySection } from "@/components/caregiver/family-section";
 export const instant = false;
 
 export default async function PatientProfilePage() {
+  await connection();
   const user = await requireRole("patient");
   const profiles = await listPatientProfiles();
   const selected = await getSelectedPatient();

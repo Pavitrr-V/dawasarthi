@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { listCaregiverLinkSummaries } from "@/lib/caregiver-dashboard";
@@ -7,6 +8,7 @@ import { PatientsIcon } from "@/components/icons";
 export const instant = false;
 
 export default async function CaregiverPatientsPage() {
+  await connection();
   await requireRole("caregiver");
   const links = await listCaregiverLinkSummaries();
 

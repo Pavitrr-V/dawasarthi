@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireRole } from "@/lib/auth";
@@ -14,6 +15,7 @@ export default async function EditPatientPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await connection();
   await requireRole("patient");
   const { id } = await params;
 

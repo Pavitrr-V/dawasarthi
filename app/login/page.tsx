@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { safeNextPath } from "@/lib/caregiver";
@@ -11,6 +12,7 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ next?: string }>;
 }) {
+  await connection();
   const { next } = await searchParams;
   const target = safeNextPath(next);
 
