@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
-    "@supabase/supabase-js": "^2.117.3",
+    "@supabase/supabase-js": "^2.118.0",
+    "clsx": "^2.1.1",
     "csv-parse": "^7.0.3",
     "dotenv": "^18.0.8",
     "html5-qrcode": "^2.3.8",
@@ -20,7 +21,8 @@
     "qrcode.react": "^4.2.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
