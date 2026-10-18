@@ -3,6 +3,7 @@ import {
   INVITE_ALPHABET,
   INVITE_LENGTH,
   INVITE_TTL_HOURS,
+  JOIN_ATTEMPT_LIMIT,
   generateInviteCode,
   inviteHoursLeft,
   isInviteExpired,
@@ -13,6 +14,7 @@ import {
   firstName,
   joinPath,
   joinUrl,
+  rateLimitMinutesLeft,
   safeNextPath,
 } from "@/lib/caregiver";
 
@@ -72,6 +74,33 @@ describe("isInviteExpired / inviteHoursLeft", () => {
 
   it("treats an unparseable date as expired", () => {
     expect(isInviteExpired("not-a-date", now)).toBe(true);
+  });
+});
+
+describe("rateLimitMinutesLeft", () => {
+  const now = Date.parse("2026-01-01T12:00:00.000Z");
+
+  it("allows 10 failed attempts per window", () => {
+    expect(JOIN_ATTEMPT_LIMIT).toBe(10);
+  });
+
+  it("reports whole minutes until the oldest attempt ages out", () => {
+    const oldest = new Date(now - 30 * 60 * 1000).toISOString();
+    expect(rateLimitMinutesLeft(oldest, now)).toBe(30);
+  });
+
+  it("rounds up partial minutes", () => {
+    const oldest = new Date(now - 59.5 * 60 * 1000).toISOString();
+    expect(rateLimitMinutesLeft(oldest, now)).toBe(1);
+  });
+
+  it("returns 0 once the window has passed", () => {
+    const oldest = new Date(now - 61 * 60 * 1000).toISOString();
+    expect(rateLimitMinutesLeft(oldest, now)).toBe(0);
+  });
+
+  it("returns 0 for an unparseable date", () => {
+    expect(rateLimitMinutesLeft("nope", now)).toBe(0);
   });
 });
 

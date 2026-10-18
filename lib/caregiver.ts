@@ -20,11 +20,28 @@ export const INVITE_LENGTH = 8;
 /** An unclaimed invite expires this many hours after it is created. */
 export const INVITE_TTL_HOURS = 48;
 
-/** Max join attempts allowed per user, per rolling window. */
-export const JOIN_ATTEMPT_LIMIT = 5;
+/** Max *failed* join attempts allowed per user, per rolling window. */
+export const JOIN_ATTEMPT_LIMIT = 10;
 
 /** The rolling window for the join rate limit. */
 export const JOIN_ATTEMPT_WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * Whole minutes until the oldest attempt in the window ages out and a
+ * failed-attempt slot frees up. Returns at least 1 when time remains.
+ */
+export function rateLimitMinutesLeft(
+  oldestAttemptAt: string | Date,
+  now: number = Date.now()
+): number {
+  const oldest =
+    oldestAttemptAt instanceof Date
+      ? oldestAttemptAt.getTime()
+      : Date.parse(oldestAttemptAt);
+  if (Number.isNaN(oldest)) return 0;
+  const remaining = oldest + JOIN_ATTEMPT_WINDOW_MS - now;
+  return remaining <= 0 ? 0 : Math.ceil(remaining / (60 * 1000));
+}
 
 /** Generate a fresh invite code using the platform CSPRNG. */
 export function generateInviteCode(): string {
