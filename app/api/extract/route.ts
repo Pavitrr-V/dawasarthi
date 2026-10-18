@@ -17,6 +17,13 @@ import {
   type MedicineExtraction,
   type ScanMode,
 } from "@/lib/extraction";
+import {
+  PRESCRIPTION_JSON_SCHEMA,
+  PRESCRIPTION_SYSTEM_INSTRUCTION,
+  buildPrescriptionUserPrompt,
+  parsePrescriptionJson,
+  type PrescriptionExtraction,
+} from "@/lib/prescription";
 import { MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
 
 export const maxDuration = 60;
@@ -110,15 +117,17 @@ export async function POST(request: Request) {
   // allSettled never throws: each image either yields a { data, model_used }
   // result or an error we classify below. The model used is returned in the
   // response (never shown in UI text) so the reader is traceable.
+  const isPrescription = mode === "prescription";
   const settled = await Promise.allSettled(
     images.map((image) =>
-      callGemini<MedicineExtraction>({
+      callGemini<MedicineExtraction | PrescriptionExtraction>({
         kind: "scan",
-        prompt: buildUserPrompt(mode as ScanMode),
-        systemInstruction: SYSTEM_INSTRUCTION,
+        prompt: isPrescription ? buildPrescriptionUserPrompt() : buildUserPrompt(mode as ScanMode),
+        systemInstruction: isPrescription ? PRESCRIPTION_SYSTEM_INSTRUCTION : SYSTEM_INSTRUCTION,
         images: [image],
-        responseSchema: EXTRACTION_JSON_SCHEMA,
-        parse: parseExtractionJson,
+        responseSchema: isPrescription ? PRESCRIPTION_JSON_SCHEMA : EXTRACTION_JSON_SCHEMA,
+        parse: (text) =>
+          isPrescription ? parsePrescriptionJson(text) : parseExtractionJson(text),
       })
     )
   );
@@ -129,9 +138,10 @@ export async function POST(request: Request) {
     }
   }
 
-  const extractions: (MedicineExtraction | null)[] = settled.map((result) =>
-    result.status === "fulfilled" ? result.value.data : null
-  );
+  const extractions: (MedicineExtraction | PrescriptionExtraction | null)[] =
+    settled.map((result) =>
+      result.status === "fulfilled" ? result.value.data : null
+    );
   const modelsUsed: (string | null)[] = settled.map((result) =>
     result.status === "fulfilled" ? result.value.model_used : null
   );
@@ -176,7 +186,10 @@ export async function POST(request: Request) {
 
   // Two images (strip + box) are returned per image for later cross-checking.
   if (paths.length === 2) {
-    const [strip, box] = extractions;
+    const [strip, box] = extractions as [
+      MedicineExtraction | null,
+      MedicineExtraction | null,
+    ];
     if (!strip && !box) return fail(message, status);
     return NextResponse.json({
       strip: strip ?? null,
@@ -187,5 +200,11 @@ export async function POST(request: Request) {
 
   const single = extractions[0];
   if (!single) return fail(message, status);
+  if (isPrescription) {
+    return NextResponse.json({
+      ...single,
+      model_used: modelsUsed[0] ?? null,
+    });
+  }
   return NextResponse.json({ ...single, model_used: modelsUsed[0] ?? null });
 }
