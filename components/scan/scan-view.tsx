@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase/client";
 import { compressImage } from "@/lib/image";
 import { DISCLAIMER, MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
 import { EMPTY_EXTRACTION, saveReviewPayload } from "@/lib/review";
+import { savePrescriptionReviewPayload } from "@/lib/prescription-review";
+import type { PrescriptionExtraction } from "@/lib/prescription";
 import { nameHintFromScan, parseGs1 } from "@/lib/gs1";
 import { lookupCatalogByName } from "@/app/(app)/scan/catalog-actions";
 import { Button, Card } from "@/components/ui";
@@ -161,6 +163,23 @@ export function ScanView({ userId }: { userId: string }) {
    */
   function goToReview() {
     if (!result) return;
+
+    // Prescription mode returns a completely different shape (a list of
+    // medicine lines), so it gets its own review screen.
+    if (mode === "prescription") {
+      const prescription = result as unknown as PrescriptionExtraction;
+      if (!prescription || !Array.isArray(prescription.medicines) || prescription.medicines.length === 0) {
+        setError(
+          "We could not read this prescription. Try a sharper photo or enter the medicines manually."
+        );
+        setPhase("error");
+        return;
+      }
+      savePrescriptionReviewPayload({ extraction: prescription, imagePaths: paths });
+      router.push("/scan/prescription/review");
+      return;
+    }
+
     // Two photos come back as strip + box, but the review form edits a single
     // medicine, so prefer the strip reading and fall back to the box.
     const extraction = isSplit(result)
@@ -244,6 +263,43 @@ export function ScanView({ userId }: { userId: string }) {
   }
 
   if (phase === "done" && result) {
+    if (mode === "prescription") {
+      const prescription = result as unknown as PrescriptionExtraction;
+      return (
+        <div className="space-y-4">
+          <Card className="space-y-2">
+            <p className="text-[17px] font-semibold text-slate-900">
+              Prescription read
+            </p>
+            <p className="text-[15px] text-slate-600">
+              {prescription.doctor_name ? `Dr. ${prescription.doctor_name.replace(/^Dr\.?\s*/i, "")} · ` : ""}
+              {prescription.medicines.length} medicine{prescription.medicines.length === 1 ? "" : "s"} found
+            </p>
+            <ul className="space-y-1">
+              {prescription.medicines.map((med, index) => (
+                <li key={index} className="text-[15px] text-slate-700">
+                  {med.name || med.raw_text}
+                  {med.pattern ? ` · ${med.pattern}` : ""}
+                  {med.timing ? ` · ${med.timing.replace("_", " ")}` : ""}
+                </li>
+              ))}
+            </ul>
+          </Card>
+          <Button type="button" className="w-full" onClick={goToReview}>
+            Review &amp; save
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            onClick={reset}
+          >
+            Scan another
+          </Button>
+          <p className="text-center text-sm text-slate-400">{DISCLAIMER}</p>
+        </div>
+      );
+    }
     return (
       <div className="space-y-4">
         {isSplit(result) ? (
