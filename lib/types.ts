@@ -1,4 +1,6 @@
 import type { DaysPattern } from "@/lib/schedule";
+import type { CaregiverLinkStatus } from "@/lib/caregiver";
+import type { RiskLevel } from "@/lib/risk";
 
 export type Role = "patient" | "caregiver";
 
@@ -90,4 +92,67 @@ export type AsNeededMedicine = {
   schedule_id: string;
   medicine_id: string;
   name: string;
+};
+
+/* ------------------------------------------------------------------ */
+/* Caregiver dashboard                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Weekly adherence for one patient. `percent` is null when there is nothing to
+ * measure yet (no taken/missed/skipped doses in the window) so the UI can show
+ * "No data yet" instead of a misleading 0%.
+ */
+export type Adherence = {
+  taken: number;
+  missed: number;
+  skipped: number;
+  total: number;
+  percent: number | null;
+};
+
+/** A patient the signed-in caregiver is actively linked to (consent given). */
+export type CaregiverPatient = {
+  id: string;
+  name: string;
+};
+
+/** Everything the dashboard shows for one linked patient. */
+export type CaregiverPatientSummary = {
+  patient: CaregiverPatient;
+  /** Today's doses in Asia/Kolkata, newest handled by the UI. */
+  doses: TimelineDose[];
+  adherence: Adherence;
+};
+
+/** A caregiver<->patient link row as seen by the caregiver (no patient name
+ * yet while the request is still pending approval). */
+export type CaregiverLinkSummary = {
+  id: string;
+  status: CaregiverLinkStatus;
+  consent_given: boolean;
+  patient_id: string;
+  patient_name: string | null;
+};
+
+/** One medicine in the read-only caregiver list, with the batch-alert flag. */
+export type CaregiverMedicine = {
+  id: string;
+  name: string;
+  batch_no: string | null;
+  expiry_date: string | null;
+  risk_level: RiskLevel | null;
+  /** True when a stored risk reason carries the official batch-alert code. */
+  has_batch_alert: boolean;
+  /** Plain-language alert text (English) when `has_batch_alert` is true. */
+  alert_message: string | null;
+};
+
+/** One row of the read-only dose history list. */
+export type CaregiverHistoryRow = {
+  id: string;
+  due_at: string;
+  status: DoseStatus;
+  acted_at: string | null;
+  medicine_name: string;
 };

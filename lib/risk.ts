@@ -38,6 +38,14 @@ export type RiskResult = {
   reasons: RiskReason[];
 };
 
+/**
+ * Reason code for an official (NSQ) alert that matches this medicine's exact
+ * batch (name_and_batch). Stored in `medicines.risk_reasons`; the caregiver
+ * medicine list shows a red "official alert on this batch" banner when a
+ * stored reason carries this code.
+ */
+export const REASON_CODE_ALERT_BATCH_MATCH = "ALERT_BATCH_MATCH";
+
 /** One row from `nsq_alerts`, already matched against this medicine. */
 export type AlertMatch = {
   alert_type: string;
@@ -396,7 +404,7 @@ export function evaluateRisk(input: RiskInput): RiskResult {
   for (const alert of input.alertMatches ?? []) {
     if (alert.matchType === "name_and_batch") {
       reasons.push({
-        code: "ALERT_BATCH_MATCH",
+        code: REASON_CODE_ALERT_BATCH_MATCH,
         severity: "red",
         message_en: `Official safety alert for this batch: ${alertTypeLabel(alert.alert_type)} on ${alert.alert_date}.`,
         message_hi: `इस बैच के लिए आधिकारिक सुरक्षा चेतावनी: ${alertTypeLabel(alert.alert_type)}, ${alert.alert_date}।`,
