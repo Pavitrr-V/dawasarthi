@@ -2,7 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/env";
 
-const PUBLIC_PATHS = ["/login", "/auth", "/demo-alert"];
+const PUBLIC_PATHS = ["/login", "/auth", "/demo-alert", "/join"];
 
 function isPublicPath(pathname: string) {
   return PUBLIC_PATHS.some(

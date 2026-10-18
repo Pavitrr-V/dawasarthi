@@ -1,15 +1,18 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/auth";
-import { listPatientProfiles } from "@/lib/patients";
+import { getSelectedPatient, listPatientProfiles } from "@/lib/patients";
+import { firstName } from "@/lib/caregiver";
 import { Button, Card, EmptyState, PageHeader } from "@/components/ui";
 import { DeleteDataButton } from "@/components/delete-data-button";
 import { NotificationSettings } from "@/components/push/notification-settings";
+import { FamilySection } from "@/components/caregiver/family-section";
 
 export const instant = false;
 
 export default async function PatientProfilePage() {
   const user = await requireRole("patient");
   const profiles = await listPatientProfiles();
+  const selected = await getSelectedPatient();
 
   return (
     <div className="space-y-4">
@@ -73,6 +76,13 @@ export default async function PatientProfilePage() {
           </div>
         )}
       </section>
+
+      {selected && (
+        <FamilySection
+          patientId={selected.id}
+          patientFirstName={firstName(selected.name)}
+        />
+      )}
 
       <section className="space-y-2 pt-2">
         <DeleteDataButton />

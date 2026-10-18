@@ -8,7 +8,7 @@ import type { Role } from "@/lib/types";
 
 type Mode = "signin" | "signup";
 
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string | null }) {
   const router = useRouter();
 
   const [mode, setMode] = useState<Mode>("signin");
@@ -49,7 +49,9 @@ export function LoginForm() {
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email: cleanEmail,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback${
+            next ? `?next=${encodeURIComponent(next)}` : ""
+          }`,
           shouldCreateUser: mode === "signup",
           data:
             mode === "signup"
@@ -99,7 +101,7 @@ export function LoginForm() {
         return;
       }
 
-      router.replace("/");
+      router.replace(next ?? "/");
       router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");

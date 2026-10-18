@@ -17,6 +17,7 @@
     "dotenv": "^18.0.8",
     "html5-qrcode": "^2.3.8",
     "next": "16.4.0",
+    "qrcode.react": "^4.2.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "web-push": "^3.6.7"

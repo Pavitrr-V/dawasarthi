@@ -1,13 +1,21 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
+import { safeNextPath } from "@/lib/caregiver";
 import { Disclaimer } from "@/components/disclaimer";
 import { LoginForm } from "./login-form";
 
 export const instant = false;
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  const { next } = await searchParams;
+  const target = safeNextPath(next);
+
   const user = await getCurrentUser();
-  if (user) redirect("/");
+  if (user) redirect(target ?? "/");
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col">
@@ -21,7 +29,7 @@ export default async function LoginPage() {
             Scan a medicine, check its trust, and never miss a dose.
           </p>
         </div>
-        <LoginForm />
+        <LoginForm next={target} />
       </main>
       <Disclaimer className="border-t border-slate-200" />
     </div>

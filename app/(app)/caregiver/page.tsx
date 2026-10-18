@@ -26,10 +26,10 @@ export default async function CaregiverDashboardPage() {
       </Card>
 
       <Link
-        href="/caregiver/patients"
+        href="/join"
         className="block rounded-2xl border border-primary-200 bg-primary-50 px-4 py-4 text-center text-lg font-semibold text-primary-700"
       >
-        Link a patient
+        Enter an invite code
       </Link>
 
       <Card className="text-[15px] text-slate-600">
