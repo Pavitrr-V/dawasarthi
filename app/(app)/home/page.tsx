@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { WarningBanner } from "@/components/safety/WarningBanner";
 import type { SafetyWarning } from "@/lib/types/safety";
 import { runSafetyCheckForPatient } from "@/lib/actions/safety-check";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { createClient as createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export default function HomePage() {
   const supabase = createSupabaseBrowserClient();
