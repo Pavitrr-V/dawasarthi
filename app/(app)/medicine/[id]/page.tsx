@@ -7,6 +7,7 @@ import { getOwnedPatient } from "@/lib/patients";
 import { evaluateRisk, daysToExpiry } from "@/lib/risk";
 import { buildRiskContext, MEDICINE_RISK_COLUMNS, type MedicineRiskRow } from "@/lib/risk-data";
 import { Card, PageHeader } from "@/components/ui";
+import { RetryButton } from "@/components/ui/retry-button";
 import { TrustCard } from "@/components/medicine/trust-card";
 import { MedicineInfoPanel } from "@/components/medicine/medicine-info-panel";
 import {
@@ -15,6 +16,12 @@ import {
 } from "@/components/medicine/schedule-list";
 import { MEDICINE_IMAGES_BUCKET } from "@/lib/constants";
 import { istToday } from "@/lib/schedule";
+import {
+  duplicateIngredients,
+  allergyCheck,
+  type MedicineWithComp,
+  type PatientWithAllergies,
+} from "@/lib/safety-pure";
 
 export const instant = false;
 
@@ -115,6 +122,44 @@ export default async function MedicinePage({
   ]);
 
   const schedules = (schedulesResult.data ?? []) as ScheduleCardRow[];
+
+  // Fetch all medicines of this patient (for duplicate detection) and the
+  // patient's allergies (for allergy check). Uses the signed-in user's server
+  // client so RLS applies.
+  const { data: allMedsRows, error: allMedsErr } = await supabase
+    .from("medicines")
+    .select("id, name, composition, active")
+    .eq("patient_id", medicine.patient_id);
+
+  let patientAllergies: PatientWithAllergies | null = null;
+  if (patient?.allergies) {
+    patientAllergies = {
+      id: patient.id,
+      allergies: patient.allergies,
+    } as PatientWithAllergies;
+  }
+
+  let duplicateWarnings = [] as ReturnType<typeof duplicateIngredients>;
+  let allergyWarnings = [] as ReturnType<typeof allergyCheck>;
+  let safetyLoadError: string | null = null;
+
+  if (allMedsErr) {
+    console.error(
+      "[medicine] medicines query error:",
+      allMedsErr.message,
+      allMedsErr.code
+    );
+    safetyLoadError = allMedsErr.message || "Failed to load medicines for safety checks.";
+  } else {
+    const allMeds = (allMedsRows ?? []) as unknown as MedicineWithComp[];
+    // Only surface duplicate groups that involve THIS medicine.
+    duplicateWarnings = duplicateIngredients(allMeds).filter((w) =>
+      w.involved.some(
+        (n) => n.toLowerCase() === (medicine.name ?? "").toLowerCase()
+      )
+    );
+    allergyWarnings = allergyCheck(patientAllergies, medicine.composition as any);
+  }
 
   const result = evaluateRisk(context.input);
   const expiresInDays = daysToExpiry(medicine.expiry_date, context.input.today);
@@ -287,6 +332,75 @@ export default async function MedicinePage({
         ) : (
           <p className="text-[15px] text-slate-500">
             No known interaction warnings for this composition.
+          </p>
+        )}
+      </Card>
+
+      <Card className="space-y-3">
+        <p className="text-sm font-semibold tracking-wide text-slate-500 uppercase">
+          Duplicate ingredients
+        </p>
+        {safetyLoadError ? (
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-[14px] text-red-700">{safetyLoadError}</p>
+            <RetryButton />
+          </div>
+        ) : duplicateWarnings.length > 0 ? (
+          <ul className="space-y-3">
+            {duplicateWarnings.map((w, index) => (
+              <li key={index} className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-[12px] font-bold uppercase text-red-800">
+                    {w.severity}
+                  </span>
+                  <p className="text-[15px] font-semibold text-slate-900">
+                    {w.title}
+                  </p>
+                </div>
+                <p className="text-[14px] leading-snug text-slate-600">
+                  {w.message}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[15px] text-slate-500">
+            No duplicate ingredients found.
+          </p>
+        )}
+      </Card>
+
+      <Card className="space-y-3">
+        <p className="text-sm font-semibold tracking-wide text-slate-500 uppercase">
+          Allergy check
+        </p>
+        {safetyLoadError ? (
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-[14px] text-red-700">{safetyLoadError}</p>
+            <RetryButton />
+          </div>
+        ) : allergyWarnings.length > 0 ? (
+          <ul className="space-y-3">
+            {allergyWarnings.map((w, index) => (
+              <li key={index} className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-[12px] font-bold uppercase text-red-800">
+                    RED
+                  </span>
+                  <p className="text-[15px] font-semibold text-slate-900">
+                    {w.title}
+                  </p>
+                </div>
+                <p className="text-[14px] leading-snug text-slate-600">
+                  {w.message}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[15px] text-slate-500">
+            No allergy match for {patient?.name ?? "this patient"}
+            &apos;s allergies.
           </p>
         )}
       </Card>

@@ -1,107 +1,28 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
-import { ingredientKey, normalizeIngredient } from "@/lib/utils/normalize";
-import { buildAllergyMatcher } from "@/lib/data/allergy-synonyms";
+import { normalizeIngredient } from "@/lib/utils/normalize";
 import type {
   SafetyCheckResult,
   SafetyWarning,
   InteractionPair,
 } from "@/lib/types/safety";
-import type { Medicine, Patient } from "@/lib/types/medicine";
 import { llmInteractionCheck } from "@/lib/llm/safety-llm";
 
-export type MedicineWithComp = Pick<
-  Medicine,
-  "id" | "name" | "composition" | "active"
-> & {
-  active?: boolean;
-};
+// Pure (no server deps) helpers are extracted to lib/safety-pure.ts so they
+// can be unit-tested without "server-only". Re-exported here for callers.
+import {
+  duplicateIngredients,
+  allergyCheck,
+  type MedicineWithComp,
+  type PatientWithAllergies,
+} from "@/lib/safety-pure";
 
-export type PatientWithAllergies = Pick<Patient, "id" | "allergies">;
+export { duplicateIngredients, allergyCheck };
+export type { MedicineWithComp, PatientWithAllergies };
 
 function isActiveMed(m: MedicineWithComp): boolean {
   return m.active !== false;
-}
-
-export function duplicateIngredients(
-  medicines: MedicineWithComp[]
-): SafetyWarning[] {
-  const warnings: SafetyWarning[] = [];
-  const ingToMeds = new Map<string, Set<string>>();
-
-  for (const m of medicines) {
-    if (!isActiveMed(m)) continue;
-    const comp = m.composition || [];
-    for (const c of comp) {
-      const k = ingredientKey(c.name);
-      if (!k) continue;
-      if (!ingToMeds.has(k)) ingToMeds.set(k, new Set());
-      ingToMeds.get(k)!.add(m.name);
-    }
-  }
-
-  for (const [ing, namesSet] of ingToMeds) {
-    const names = Array.from(namesSet).filter(Boolean);
-    if (names.length >= 2) {
-      const involved = names.slice().sort((a, b) => a.localeCompare(b));
-      const ingDisplay = ing
-        .split(" ")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ");
-      const title = "Duplicate active ingredient";
-      const message = `${involved.join(" and ")} both contain ${ingDisplay}; taking both can cause overdose.`;
-      warnings.push({
-        type: "duplicate",
-        severity: "severe",
-        title,
-        message,
-        involved: [ingDisplay, ...involved],
-        source: "rules",
-      });
-    }
-  }
-  return warnings;
-}
-
-export function allergyCheck(
-  patient: PatientWithAllergies | null | undefined,
-  composition: MedicineWithComp["composition"] | null | undefined
-): SafetyWarning[] {
-  const warnings: SafetyWarning[] = [];
-  const allergies = patient?.allergies || [];
-  if (!allergies.length || !composition || composition.length === 0) {
-    return warnings;
-  }
-
-  const matcher = buildAllergyMatcher();
-  const compList = composition || [];
-
-  for (const a of allergies) {
-    const aNorm = normalizeIngredient(a);
-    const aCanon = matcher.get(aNorm) || matcher.get(a.toLowerCase().trim());
-    for (const c of compList) {
-      const cNorm = normalizeIngredient(c.name);
-      const cCanon = matcher.get(cNorm);
-      const match =
-        (!!aCanon && !!cCanon && aCanon === cCanon) ||
-        (!!aCanon && cNorm.includes(aCanon)) ||
-        (!!cCanon && aNorm.includes(cCanon)) ||
-        cNorm === aNorm;
-
-      if (match) {
-        warnings.push({
-          type: "allergy",
-          severity: "severe",
-          title: "Allergy warning (RED)",
-          message: `Allergy to ${a} may be triggered by ${c.name}.`,
-          involved: [c.name, a],
-          source: "rules",
-        });
-      }
-    }
-  }
-  return warnings;
 }
 
 export async function interactionCheck(
@@ -111,7 +32,7 @@ export async function interactionCheck(
   const active = medicines.filter(isActiveMed);
   if (active.length < 2) return warnings;
 
-  const supabase = createClient();
+  const supabase = await createClient();
 
   for (let i = 0; i < active.length; i++) {
     for (let j = i + 1; j < active.length; j++) {
@@ -128,7 +49,7 @@ export async function interactionCheck(
         bKeys.add(normalizeIngredient(c.name))
       );
 
-      const { data: rows, error } = await (await supabase)
+      const { data: rows, error } = await supabase
         .from("interaction_pairs")
         .select(
           "id, drug_a, drug_b, severity, note, reference, source_url, fetched_at"
@@ -167,7 +88,8 @@ export async function interactionCheck(
               type: "interaction",
               severity: (r.severity as any) || "moderate",
               title: "Drug-drug interaction",
-              message: r.note || "Potential interaction between these medicines.",
+              message:
+                r.note || "Potential interaction between these medicines.",
               involved: [aMed.name, bMed.name],
               source: "db",
               sourceUrl: r.source_url,
